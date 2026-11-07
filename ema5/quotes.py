@@ -117,8 +117,8 @@ class LivePrices:
             out[name[4:-3]] = {
                 "ltp": price,
                 "change_pct": _number(value.get("chp")),
-                "day_high": _number(value.get("h")) or None,
-                "day_low": _number(value.get("l")) or None,
+                "day_high": _number(value.get("high_price", value.get("h"))) or None,
+                "day_low": _number(value.get("low_price", value.get("l"))) or None,
                 "source": "Fyers",
                 "quote_age_seconds": round(age, 1) if age is not None else None,
                 "fetched_at": fetched.isoformat(timespec="seconds"),

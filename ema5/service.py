@@ -537,6 +537,7 @@ class Desk:
             "symbol": symbol,
             "setup": setup,
             "months": strategy.monthly_series(frame, 30),
+            "days": strategy.daily_series(frame),
             "debt": self.debt.get(symbol, refresh=refresh_debt) if refresh_debt
                     else (self.debt.cached(symbol) or self.debt.get(symbol)),
         }

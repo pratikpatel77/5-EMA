@@ -338,3 +338,12 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1p
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001s !important; transition-duration: .001s !important; }
 }
+
+/* zoomable chart */
+.chart-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 6px; }
+.chart-bar .chart-gap { flex: 1; }
+.chart-bar .btn { padding: 3px 10px; font-size: 12px; min-height: 0; }
+.chart-bar .btn.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+.chart-readout { min-height: 18px; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.chart-wrap svg.zoomable { cursor: grab; touch-action: none; user-select: none; }
+.chart-wrap svg.zoomable.dragging { cursor: grabbing; }

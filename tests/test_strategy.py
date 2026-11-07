@@ -260,3 +260,12 @@ def test_monthly_series_marks_the_month_in_progress():
     assert rows[-1]["forming"] is True
     assert rows[-2]["forming"] is False
     assert rows[-1]["month"] == "2026-11"
+
+
+def test_daily_series_returns_recent_candles_with_iso_dates():
+    frame = pd.DataFrame(
+        {"open": [1.0, 2.0, 3.0], "high": [2.0, 3.0, 4.0], "low": [0.5, 1.5, 2.5], "close": [1.5, 2.5, 3.5]},
+        index=pd.to_datetime(["2026-11-03", "2026-11-04", "2026-11-05"]))
+    rows = S.daily_series(frame, bars=2)
+    assert [r["date"] for r in rows] == ["2026-11-04", "2026-11-05"]
+    assert rows[-1]["high"] == 4.0

@@ -163,119 +163,348 @@ function ladderStrip(position) {
   return svg;
 }
 
-/* -------------------------------------------------------- monthly chart */
-function monthlyChart(months, setup, marks) {
+/* ------------------------------------------------------- zoomable chart */
+/* Monthly or daily candles. Wheel = zoom at the cursor, drag = pan, double-click
+   = show everything. "Alert" and "Entry" jump to those candles. */
+function zoomChart(detail, setup, marks, entryDate) {
   const NS = 'http://www.w3.org/2000/svg';
-  const W = 560, H = 250, padT = 12, padB = 24, padR = 62, padL = 4;
+  const W = 640, H = 320, padT = 14, padB = 26, padR = 64, padL = 6;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
   const wrap = el('div', 'chart-wrap');
-  if (!months || months.length < 2) {
+  const sets = {
+    monthly: (detail.months || []).map((m) => ({ ...m, key: m.month })),
+    daily: (detail.days || []).map((d) => ({ ...d, key: d.date })),
+  };
+  if (sets.monthly.length < 2) {
     wrap.append(el('p', 'muted small', 'Not enough monthly history to draw a chart.'));
     return wrap;
   }
-  const levels = [marks.trigger, marks.stop].filter((v) => v);
-  const lows = months.map((m) => m.low).concat(levels);
-  const highs = months.map((m) => m.high).concat(levels);
-  const lo = Math.min(...lows), hi = Math.max(...highs);
-  const pad = (hi - lo) * 0.06 || 1;
-  const yMin = lo - pad, yMax = hi + pad;
-  const y = (v) => padT + ((yMax - v) / (yMax - yMin)) * (H - padT - padB);
-  const plotW = W - padL - padR;
-  const band = plotW / months.length;
-  const bodyW = Math.max(3, Math.min(14, band * 0.58));
+  const alertMonth = setup.alert_month;
+  const triggerDate = setup.triggered_on || null;
+  let mode = 'monthly', data = sets.monthly, v0 = 0, v1 = data.length, hover = null;
 
+  const bar = el('div', 'chart-bar');
+  const HINT = 'Scroll to zoom · drag to pan · double-click to reset';
+  const readout = el('div', 'chart-readout muted small', HINT);
   const svg = document.createElementNS(NS, 'svg');
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('width', '100%');
   svg.setAttribute('role', 'img');
+  svg.classList.add('zoomable');
+
   const add = (tag, attrs, parent) => {
     const node = document.createElementNS(NS, tag);
     for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
     (parent || svg).append(node);
     return node;
   };
-  const cx = (i) => padL + band * (i + 0.5);
-
-  // alert candle highlight, behind everything
-  const alertIndex = months.findIndex((m) => m.month === setup.alert_month);
-  if (alertIndex >= 0) {
-    add('rect', { x: padL + band * alertIndex, y: padT, width: band, height: H - padT - padB,
-                  fill: 'var(--violet-wash)' });
-  }
-
-  // reference levels: dashed so a level never reads as data
-  const level = (value, color, label) => {
-    if (!value) return;
-    add('line', { x1: padL, x2: W - padR, y1: y(value), y2: y(value), stroke: color,
-                  'stroke-width': 1.5, 'stroke-dasharray': '5 4' });
-    const text = add('text', { x: W - padR + 6, y: y(value) + 3.5, fill: 'var(--ink-2)', 'font-size': 10 });
-    text.textContent = `${label} ${nf0.format(value)}`;
+  const minSpan = () => Math.min(data.length, mode === 'daily' ? 12 : 4);
+  const clampView = () => {
+    const n = data.length;
+    const span = Math.min(Math.max(v1 - v0, minSpan()), n);
+    if (v0 < 0) v0 = 0;
+    if (v0 + span > n) v0 = n - span;
+    v1 = v0 + span;
   };
-  level(marks.trigger, 'var(--good)', 'Trigger');
-  level(marks.stop, 'var(--critical)', 'Stop');
-  if (marks.entry) level(marks.entry, 'var(--accent)', 'Entry');
-
-  // candles
-  months.forEach((m, i) => {
-    const up = m.close >= m.open;
-    const colour = up ? 'var(--good)' : 'var(--critical)';
-    add('line', { x1: cx(i), x2: cx(i), y1: y(m.high), y2: y(m.low), stroke: colour, 'stroke-width': 1 });
-    const top = y(Math.max(m.open, m.close));
-    const height = Math.max(1.5, Math.abs(y(m.open) - y(m.close)));
-    const rect = add('rect', { x: cx(i) - bodyW / 2, y: top, width: bodyW, height, rx: 1.5, fill: colour });
-    if (m.forming) { rect.setAttribute('fill-opacity', '0.45'); }
-    if (i === alertIndex) {
-      add('rect', { x: cx(i) - bodyW / 2 - 2, y: y(m.high) - 2, width: bodyW + 4,
-                    height: y(m.low) - y(m.high) + 4, rx: 3, fill: 'none',
-                    stroke: 'var(--violet)', 'stroke-width': 1.5 });
+  // index of the candle holding `key` (a date or month); daily falls to the next trading day
+  const indexOfKey = (key, prefix) => {
+    if (!key) return -1;
+    if (mode === 'monthly') return data.findIndex((d) => d.key === key.slice(0, 7));
+    return data.findIndex((d) => (prefix ? d.key.startsWith(key) : d.key >= key));
+  };
+  const alertRange = () => {
+    if (!alertMonth) return null;
+    if (mode === 'monthly') {
+      const i = data.findIndex((d) => d.key === alertMonth);
+      return i < 0 ? null : [i, i];
     }
-    const hit = add('rect', { x: padL + band * i, y: padT, width: band, height: H - padT - padB,
-                              fill: 'transparent' });
-    const title = document.createElementNS(NS, 'title');
-    title.textContent = `${monthName(m.month)}${m.forming ? ' (in progress)' : ''}\nO ${money(m.open)}  H ${money(m.high)}\nL ${money(m.low)}  C ${money(m.close)}` +
-      (m.ema5 ? `\n5 EMA ${money(m.ema5)}` : '');
-    hit.append(title);
-  });
+    const idx = data.map((d, i) => (d.key.startsWith(alertMonth) ? i : -1)).filter((i) => i >= 0);
+    return idx.length ? [idx[0], idx[idx.length - 1]] : null;
+  };
+  const focus = (centre, before, after) => {
+    v0 = centre - before;
+    v1 = centre + after + 1;
+    draw();
+  };
+  const focusAlert = () => {
+    const r = alertRange();
+    if (!r) return;
+    if (mode === 'monthly') focus(r[0], 6, 6);
+    else focus(r[0], 12, r[1] - r[0] + 30);
+  };
+  const focusEntry = () => {
+    const i = entryDate ? indexOfKey(entryDate) : -1;
+    if (i < 0) return;
+    if (mode === 'monthly') focus(i, 8, 4);
+    else focus(i, 30, 30);
+  };
+  const showAll = () => { v0 = 0; v1 = data.length; draw(); };
+  const setMode = (next) => {
+    if (next === mode || !sets[next].length) return;
+    mode = next;
+    data = sets[next];
+    if (mode === 'daily') {
+      if (entryDate && indexOfKey(entryDate) >= 0) focusEntry(); else focusAlert();
+    } else {
+      showAll();
+    }
+    syncButtons();
+  };
 
-  // the 5 EMA, 2px with round joins
-  const points = [];
-  months.forEach((m, i) => { if (m.ema5) points.push(`${cx(i)},${y(m.ema5)}`); });
-  if (points.length > 1) {
-    add('polyline', { points: points.join(' '), fill: 'none', stroke: 'var(--accent)',
-                      'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' });
+  const buttons = {};
+  const button = (label, title, onClick, key) => {
+    const b = el('button', 'btn small', label);
+    b.type = 'button';
+    b.title = title;
+    b.addEventListener('click', onClick);
+    bar.append(b);
+    if (key) buttons[key] = b;
+    return b;
+  };
+  const syncButtons = () => {
+    buttons.monthly.classList.toggle('on', mode === 'monthly');
+    if (buttons.daily) buttons.daily.classList.toggle('on', mode === 'daily');
+  };
+  const zoomBy = (factor) => {
+    // zoom about the entry candle when it is on screen, else about the middle
+    const e = entryDate ? indexOfKey(entryDate) + 0.5 : -1;
+    const c = e >= v0 && e <= v1 ? e : (v0 + v1) / 2;
+    const span = (v1 - v0) * factor, ratio = (c - v0) / (v1 - v0);
+    v0 = c - ratio * span;
+    v1 = v0 + span;
+    draw();
+  };
+  button('Monthly', 'Monthly candles', () => setMode('monthly'), 'monthly');
+  if (sets.daily.length) button('Daily', 'Daily candles', () => setMode('daily'), 'daily');
+  bar.append(el('span', 'chart-gap'));
+  if (alertMonth) button('Alert', 'Zoom to the alert candle', focusAlert);
+  if (entryDate) button('Entry', 'Zoom to the entry candle', focusEntry);
+  button('All', 'Show everything', showAll);
+  button('+', 'Zoom in', () => zoomBy(0.6));
+  button('−', 'Zoom out', () => zoomBy(1 / 0.6));
+
+  const label = (d) => {
+    if (mode === 'monthly') return monthName(d.key) + (d.forming ? ' (in progress)' : '');
+    return new Date(`${d.key}T00:00:00`).toLocaleDateString('en-IN',
+      { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  };
+  const tickLabel = (d) => {
+    if (mode === 'monthly') {
+      const [year, month] = d.key.split('-');
+      return month === '01' ? year : monthName(d.key).slice(0, 3);
+    }
+    return new Date(`${d.key}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  };
+
+  function draw() {
+    clampView();
+    svg.replaceChildren();
+    syncButtons();
+    const n = data.length, span = v1 - v0, band = plotW / span;
+    const x = (i) => padL + (i + 0.5 - v0) * band;
+    const first = Math.max(0, Math.floor(v0)), last = Math.min(n - 1, Math.ceil(v1) - 1);
+    const seen = data.slice(first, last + 1);
+    if (!seen.length) return;
+
+    // price range follows what is on screen; a level only widens it when it is close
+    let lo = Math.min(...seen.map((d) => d.low)), hi = Math.max(...seen.map((d) => d.high));
+    const reach = (hi - lo) * 0.6 || hi * 0.05;
+    const levels = [
+      [marks.trigger, 'var(--good)', 'Trigger'],
+      [marks.stop, 'var(--critical)', 'Stop'],
+      [marks.entry, 'var(--accent)', 'Entry'],
+      mode === 'daily' ? [setup.ema5, 'var(--accent)', '5 EMA (alert)'] : null,
+    ].filter((l) => l && l[0]);
+    levels.filter((l) => l[0] >= lo - reach && l[0] <= hi + reach)
+      .forEach((l) => { lo = Math.min(lo, l[0]); hi = Math.max(hi, l[0]); });
+    if (mode === 'monthly') {
+      seen.forEach((d) => { if (d.ema5) { lo = Math.min(lo, d.ema5); hi = Math.max(hi, d.ema5); } });
+    }
+    const pad = (hi - lo) * 0.07 || 1;
+    const yMin = lo - pad, yMax = hi + pad;
+    const y = (v) => padT + ((yMax - v) / (yMax - yMin)) * plotH;
+    const clipId = `clip${Math.random().toString(36).slice(2, 8)}`;
+    const clip = add('clipPath', { id: clipId }, add('defs', {}));
+    add('rect', { x: padL, y: padT, width: plotW, height: plotH }, clip);
+    const plot = add('g', { 'clip-path': `url(#${clipId})` });
+
+    // grid + price axis
+    const step = (yMax - yMin) / 4;
+    for (let k = 0; k <= 4; k++) {
+      const v = yMin + step * k;
+      add('line', { x1: padL, x2: padL + plotW, y1: y(v), y2: y(v), stroke: 'var(--baseline)',
+                    'stroke-opacity': 0.35, 'stroke-width': 1 }, plot);
+      add('text', { x: W - padR + 6, y: y(v) + 3, fill: 'var(--muted)', 'font-size': 9 }).textContent = nf0.format(v);
+    }
+
+    // alert candle(s), behind the candles
+    const ar = alertRange();
+    if (ar) {
+      add('rect', { x: padL + (ar[0] - v0) * band, y: padT, width: (ar[1] - ar[0] + 1) * band,
+                    height: plotH, fill: 'var(--violet-wash)' }, plot);
+    }
+
+    // entry candle: its own shaded column, so it stands out at any zoom
+    const entryIdx = entryDate ? indexOfKey(entryDate) : -1;
+    if (entryIdx >= 0) {
+      add('rect', { x: padL + (entryIdx - v0) * band, y: padT, width: band, height: plotH,
+                    fill: 'var(--accent)', 'fill-opacity': 0.24 }, plot);
+    }
+
+    // alert / trigger-cross / entry markers
+    const marker = (idx, color, text, row) => {
+      if (idx < 0 || idx < v0 - 1 || idx > v1) return;
+      add('line', { x1: x(idx), x2: x(idx), y1: padT, y2: padT + plotH, stroke: color,
+                    'stroke-width': 1.5, 'stroke-dasharray': '2 3' }, plot);
+      add('text', { x: x(idx) + 4, y: padT + 10 + row * 11, fill: color, 'font-size': 10,
+                    'font-weight': 600 }, plot).textContent = text;
+    };
+    const trigIdx = triggerDate ? indexOfKey(triggerDate) : -1;
+    if (ar) marker(ar[0], 'var(--violet)', 'Alert', 0);
+    if (trigIdx >= 0 && trigIdx !== entryIdx) marker(trigIdx, 'var(--good)', 'Crossed trigger', 1);
+    if (entryIdx >= 0) marker(entryIdx, 'var(--accent)', marks.entry ? 'Entry' : 'Entry (crossed trigger)', 2);
+
+    // reference levels; one that is off screen pins to the edge, faded
+    levels.forEach(([value, color, text]) => {
+      const inside = value >= yMin && value <= yMax;
+      const yy = Math.min(padT + plotH, Math.max(padT, y(value)));
+      add('line', { x1: padL, x2: padL + plotW, y1: yy, y2: yy, stroke: color, 'stroke-width': 1.4,
+                    'stroke-dasharray': '5 4', 'stroke-opacity': inside ? 1 : 0.35 }, plot);
+      add('text', { x: W - padR + 6, y: yy + (inside ? -3 : 9), fill: color, 'font-size': 9.5,
+                    'font-weight': 600 }).textContent = `${text} ${nf0.format(value)}`;
+    });
+
+    // monthly 5 EMA
+    if (mode === 'monthly') {
+      const pts = [];
+      data.forEach((d, i) => { if (d.ema5 && i >= first - 1 && i <= last + 1) pts.push(`${x(i)},${y(d.ema5)}`); });
+      if (pts.length > 1) {
+        add('polyline', { points: pts.join(' '), fill: 'none', stroke: 'var(--accent)',
+                          'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }, plot);
+      }
+    }
+
+    // candles
+    const bodyW = Math.max(1.4, Math.min(24, band * 0.6));
+    const ring = (i, d, color) => add('rect', {
+      x: x(i) - bodyW / 2 - 2, y: y(d.high) - 2, width: bodyW + 4, height: y(d.low) - y(d.high) + 4,
+      rx: 3, fill: 'none', stroke: color, 'stroke-width': 1.5 }, plot);
+    seen.forEach((d, k) => {
+      const i = first + k;
+      const colour = d.close >= d.open ? 'var(--good)' : 'var(--critical)';
+      add('line', { x1: x(i), x2: x(i), y1: y(d.high), y2: y(d.low), stroke: colour, 'stroke-width': 1 }, plot);
+      const rect = add('rect', {
+        x: x(i) - bodyW / 2, y: y(Math.max(d.open, d.close)), width: bodyW,
+        height: Math.max(1.2, Math.abs(y(d.open) - y(d.close))), rx: bodyW > 5 ? 1.5 : 0, fill: colour }, plot);
+      if (d.forming) rect.setAttribute('fill-opacity', '0.45');
+      if (mode === 'monthly' && d.key === alertMonth) ring(i, d, 'var(--violet)');
+      if (i === entryIdx) {
+        const r = ring(i, d, 'var(--accent)');
+        r.setAttribute('stroke-width', 2.2);
+        const px = marks.entry || marks.trigger;
+        if (px) {
+          add('circle', { cx: x(i), cy: y(px), r: Math.max(3.5, Math.min(6, bodyW / 2)), fill: 'var(--accent)',
+                          stroke: 'var(--surface-raised, #fff)', 'stroke-width': 1.5 }, plot);
+        }
+      }
+    });
+
+    // callout above the entry candle
+    if (entryIdx >= first && entryIdx <= last) {
+      const d = data[entryIdx];
+      const text = marks.entry ? `Entry ${money(marks.entry)}` : `Crossed ${money(marks.trigger)}`;
+      const w = text.length * 6 + 14;
+      const cx = Math.min(padL + plotW - w / 2, Math.max(padL + w / 2, x(entryIdx)));
+      const top = Math.max(padT + 2, y(d.high) - 34);
+      add('rect', { x: cx - w / 2, y: top, width: w, height: 18, rx: 9, fill: 'var(--accent)' });
+      add('text', { x: cx, y: top + 12.5, 'text-anchor': 'middle', fill: 'var(--accent-ink, #fff)',
+                    'font-size': 10.5, 'font-weight': 700 }).textContent = text;
+      add('path', { d: `M${x(entryIdx) - 4},${top + 18} L${x(entryIdx) + 4},${top + 18} L${x(entryIdx)},${top + 24} Z`,
+                    fill: 'var(--accent)' });
+    }
+
+    // x ticks
+    const every = Math.max(1, Math.ceil(span / 7));
+    for (let i = Math.ceil(v0); i < v1; i++) {
+      if (i < 0 || i >= n || (i - Math.ceil(v0)) % every !== 0) continue;
+      add('text', { x: x(i), y: H - 9, 'text-anchor': 'middle', fill: 'var(--muted)', 'font-size': 9 })
+        .textContent = tickLabel(data[i]);
+    }
+    add('line', { x1: padL, x2: padL + plotW, y1: padT + plotH, y2: padT + plotH,
+                  stroke: 'var(--baseline)', 'stroke-width': 1 });
+
+    // crosshair + readout
+    if (hover !== null && hover >= 0 && hover < n) {
+      add('line', { x1: x(hover), x2: x(hover), y1: padT, y2: padT + plotH, stroke: 'var(--ink-2)',
+                    'stroke-width': 1, 'stroke-opacity': 0.5 });
+      const d = data[hover];
+      readout.textContent = `${label(d)} · O ${money(d.open)}  H ${money(d.high)}  L ${money(d.low)}  C ${money(d.close)}` +
+        (mode === 'monthly' && d.ema5 ? `  · 5 EMA ${money(d.ema5)}` : '');
+      readout.classList.remove('muted');
+    } else {
+      readout.textContent = HINT;
+      readout.classList.add('muted');
+    }
+    svg.setAttribute('aria-label',
+      `${mode} candles. Alert candle ${monthName(alertMonth || '')}, trigger ${money(marks.trigger)}, stop ${money(marks.stop)}.`);
   }
 
-  // month ticks, thinned so labels cannot collide
-  const every = Math.ceil(months.length / 8);
-  const last = months.length - 1;
-  months.forEach((m, i) => {
-    // the final month always gets a tick, so drop the one before it if they would touch
-    if (i % every !== 0 && i !== last) return;
-    if (i !== last && last - i < every / 2) return;
-    const text = add('text', { x: cx(i), y: H - 8, 'text-anchor': 'middle',
-                               fill: 'var(--muted)', 'font-size': 9 });
-    const [year, month] = m.month.split('-');
-    text.textContent = month === '01' ? year : monthName(m.month).slice(0, 3);
+  // wheel zooms around the cursor; drag pans
+  const toIndex = (event) => {
+    const box = svg.getBoundingClientRect();
+    const px = ((event.clientX - box.left) / box.width) * W;
+    return v0 + ((px - padL) / plotW) * (v1 - v0);
+  };
+  svg.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const idx = toIndex(event);
+    const span = v1 - v0;
+    const next = Math.min(data.length, Math.max(minSpan(), span * Math.exp(event.deltaY * 0.0015)));
+    const ratio = (idx - v0) / span;
+    v0 = idx - ratio * next;
+    v1 = v0 + next;
+    draw();
+  }, { passive: false });
+  let drag = null;
+  svg.addEventListener('pointerdown', (event) => {
+    drag = { x: event.clientX, v0, v1 };
+    svg.setPointerCapture(event.pointerId);
+    svg.classList.add('dragging');
   });
-  add('line', { x1: padL, x2: W - padR, y1: H - padB, y2: H - padB, stroke: 'var(--baseline)', 'stroke-width': 1 });
+  svg.addEventListener('pointermove', (event) => {
+    if (drag) {
+      const box = svg.getBoundingClientRect();
+      const bars = ((event.clientX - drag.x) / box.width) * W / (plotW / (drag.v1 - drag.v0));
+      v0 = drag.v0 - bars;
+      v1 = drag.v1 - bars;
+    }
+    hover = Math.round(toIndex(event) - 0.5);
+    draw();
+  });
+  const release = () => { drag = null; svg.classList.remove('dragging'); };
+  svg.addEventListener('pointerup', release);
+  svg.addEventListener('pointercancel', release);
+  svg.addEventListener('pointerleave', () => { hover = null; draw(); });
+  svg.addEventListener('dblclick', showAll);
 
-  svg.setAttribute('aria-label',
-    `Monthly candles with the 5 EMA. Alert candle ${monthName(setup.alert_month)}, trigger ${money(marks.trigger)}, stop ${money(marks.stop)}.`);
-  wrap.append(svg);
+  wrap.append(bar, readout, svg);
+  draw();
 
   const legend = el('div', 'legend');
-  const key = (cls, label, style) => {
+  const key = (cls, text, style) => {
     const span = el('span');
     const dot = el('i', cls);
     Object.assign(dot.style, style);
-    span.append(dot, document.createTextNode(label));
+    span.append(dot, document.createTextNode(text));
     return span;
   };
   legend.append(
-    key('line', '5 EMA (monthly)', { background: 'var(--accent)' }),
-    key('', 'Month up', { background: 'var(--good)' }),
-    key('', 'Month down', { background: 'var(--critical)' }),
+    key('line', '5 EMA', { background: 'var(--accent)' }),
+    key('', 'Up', { background: 'var(--good)' }),
+    key('', 'Down', { background: 'var(--critical)' }),
     key('', 'Alert candle', { background: 'var(--violet-wash)', border: '1.5px solid var(--violet)' }),
-    key('line', 'Trigger / stop', { background: 'var(--baseline)' }),
+    key('', 'Entry candle', { background: 'var(--accent-wash)', border: '1.5px solid var(--accent)' }),
+    key('line', 'Trigger / stop / entry', { background: 'var(--baseline)' }),
   );
   wrap.append(legend);
   return wrap;
@@ -658,10 +887,10 @@ function renderDrawer(detail) {
   // chart
   if (setup.alert_month) {
     const card = el('div', 'card');
-    card.append(el('h3', '', 'Monthly candles and the 5 EMA'));
-    card.append(monthlyChart(detail.months, setup, {
+    card.append(el('h3', '', 'Chart · 5 EMA, alert and entry'));
+    card.append(zoomChart(detail, setup, {
       trigger: setup.trigger, stop: setup.stop, entry: position ? position.entry : null,
-    }));
+    }, position ? position.entry_date : (setup.triggered_on || null)));
     body.append(card);
   }
 

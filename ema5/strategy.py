@@ -179,6 +179,18 @@ def monthly_series(daily: pd.DataFrame, months: int = 30, asof: date | None = No
     return rows
 
 
+def daily_series(daily: pd.DataFrame, bars: int = 520) -> list[dict]:
+    """Recent daily candles, so the chart can zoom in on the alert and entry."""
+    rows = []
+    for stamp, row in daily.tail(bars).iterrows():
+        rows.append({
+            "date": stamp.date().isoformat(),
+            "open": float(row["open"]), "high": float(row["high"]),
+            "low": float(row["low"]), "close": float(row["close"]),
+        })
+    return rows
+
+
 # --------------------------------------------------------------------------- #
 # the trailing stop
 # --------------------------------------------------------------------------- #
