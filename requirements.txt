@@ -1,0 +1,15 @@
+# 5 EMA Monthly Desk -- Python 3.10 or newer.  pip install -r requirements.txt
+#
+# Broker logins and the shared bar cache come from the pattern-scanners project,
+# so install its requirements too if you have not already.
+
+pandas>=2.2
+numpy>=1.26
+requests>=2.31
+beautifulsoup4>=4.11     # reading the screener.in balance sheet
+lxml>=4.9                # its parser
+python-dotenv>=1.0       # pattern-scanners reads the logins with this
+pyotp>=2.9               # Definedge TOTP login
+fyers-apiv3>=3.1         # only if you scan with --source fyers
+
+pytest>=7.0              # tests only

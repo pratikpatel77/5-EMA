@@ -1,0 +1,14 @@
+# Local state: tracked trades, saved scan, debt cache, server logs
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.env
+
+# Strategy source documents, kept local
+*.pdf
+*.docx
+amibroker_5ema.txt

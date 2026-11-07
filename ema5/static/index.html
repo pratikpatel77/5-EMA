@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>5 EMA Monthly Desk</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 16c3.5 0 4-9 7.5-9S14 15 17.5 15 21 9 21 9"/>
+        <path d="M7 20v-3M12 20v-6M17 20v-4"/>
+      </svg>
+    </span>
+    <span>
+      <strong>5 EMA Monthly Desk</strong>
+      <small id="universeLabel">Not scanned yet</small>
+    </span>
+  </div>
+
+  <div class="top-right">
+    <span class="pill" id="marketPill" title="NSE cash session, 09:15-15:30 IST">
+      <i class="dot" aria-hidden="true"></i><span id="marketText">Market</span>
+    </span>
+    <span class="pill quiet" id="sourcePill" hidden></span>
+    <button class="btn" id="refreshPrices" type="button" title="Live prices for the rows on screen">
+      Refresh prices
+    </button>
+    <button class="btn primary" id="scanBtn" type="button">Run scan</button>
+    <button class="btn icon" id="settingsBtn" type="button" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/>
+        <path d="M12 2.5v2.4M12 19.1v2.4M4.2 7.3l2 1.2M17.8 15.5l2 1.2M4.2 16.7l2-1.2M17.8 8.5l2-1.2"/></svg>
+    </button>
+    <button class="btn icon" id="themeBtn" type="button" aria-label="Switch light or dark" title="Light / dark">
+      <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg>
+    </button>
+  </div>
+</header>
+
+<div class="scanbar" id="scanbar" hidden>
+  <div class="scanbar-track"><div class="scanbar-fill" id="scanFill"></div></div>
+  <span id="scanMessage">Scanning...</span>
+</div>
+
+<main>
+  <section class="kpis" aria-label="Summary">
+    <div class="kpi hero">
+      <span class="kpi-label">At the trigger</span>
+      <span class="kpi-value" id="kpiCandidates">&ndash;</span>
+      <span class="kpi-note" id="kpiCandidatesNote">within the entry band</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Approaching</span>
+      <span class="kpi-value small" id="kpiApproaching">&ndash;</span>
+      <span class="kpi-note" id="kpiApproachingNote">just outside the band</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Open trades</span>
+      <span class="kpi-value small" id="kpiOpen">&ndash;</span>
+      <span class="kpi-note" id="kpiOpenNote">tracked, not ordered</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Locked in</span>
+      <span class="kpi-value small" id="kpiLocked">&ndash;</span>
+      <span class="kpi-note">by trailing stops</span>
+    </div>
+    <div class="kpi">
+      <span class="kpi-label">Closed result</span>
+      <span class="kpi-value small" id="kpiRealised">&ndash;</span>
+      <span class="kpi-note" id="kpiRealisedNote">stopped out</span>
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Views">
+    <button class="tab" role="tab" data-view="candidates" aria-selected="true">
+      At the trigger <span class="count" id="countCandidates">0</span>
+    </button>
+    <button class="tab" role="tab" data-view="approaching" aria-selected="false">
+      Approaching <span class="count" id="countApproaching">0</span>
+    </button>
+    <button class="tab" role="tab" data-view="positions" aria-selected="false">
+      Open trades <span class="count" id="countPositions">0</span>
+    </button>
+    <button class="tab" role="tab" data-view="closed" aria-selected="false">
+      Closed <span class="count" id="countClosed">0</span>
+    </button>
+    <button class="tab" role="tab" data-view="ignored" aria-selected="false">
+      Ignored <span class="count" id="countIgnored">0</span>
+    </button>
+  </nav>
+
+  <section class="panel" id="panel" role="tabpanel"></section>
+</main>
+
+<div class="drawer-scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-label="Stock detail" tabindex="-1">
+  <div class="drawer-head">
+    <div>
+      <h2 id="drawerTitle">&ndash;</h2>
+      <p id="drawerSub" class="muted"></p>
+    </div>
+    <button class="btn icon" id="drawerClose" type="button" aria-label="Close">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<dialog id="takeDialog" class="sheet">
+  <form id="takeForm" method="dialog">
+    <h2 id="takeTitle">Take entry</h2>
+    <p class="muted small" id="takeIntro"></p>
+    <div class="field-row">
+      <label>Entry price
+        <input type="number" step="0.01" min="0" name="entry" id="takeEntry" required>
+        <small id="takeEntryHint" class="muted"></small>
+      </label>
+      <label>Stop loss
+        <input type="number" step="0.01" min="0" name="stop" id="takeStop" required>
+        <small class="muted">Alert candle low</small>
+      </label>
+    </div>
+    <div class="field-row">
+      <label>Entry date
+        <input type="date" name="entry_date" id="takeDate" required>
+      </label>
+      <label>Risk per share
+        <output id="takeRisk" class="output">&ndash;</output>
+        <small class="muted" id="takeRiskPct"></small>
+      </label>
+    </div>
+    <label>Note <span class="muted">(optional)</span>
+      <input type="text" name="note" id="takeNote" maxlength="200" placeholder="Why you took it">
+    </label>
+    <p class="callout" id="takeWarn" hidden></p>
+    <p class="callout quiet">Tracking only. No order is placed anywhere.</p>
+    <div class="sheet-actions">
+      <button class="btn" type="button" data-close>Cancel</button>
+      <button class="btn primary" id="takeSubmit" type="button">Track this entry</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="closeDialog" class="sheet">
+  <form id="closeForm" method="dialog">
+    <h2>Record an exit</h2>
+    <p class="muted small" id="closeIntro"></p>
+    <div class="field-row">
+      <label>Exit price
+        <input type="number" step="0.01" min="0" name="price" id="closePrice" required>
+      </label>
+      <label>Exit date
+        <input type="date" name="date" id="closeDate" required>
+      </label>
+    </div>
+    <label>Note <span class="muted">(optional)</span>
+      <input type="text" name="note" id="closeNote" maxlength="200">
+    </label>
+    <div class="sheet-actions">
+      <button class="btn" type="button" data-close>Cancel</button>
+      <button class="btn primary" id="closeSubmit" type="button">Record exit</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settingsDialog" class="sheet">
+  <form id="settingsForm" method="dialog">
+    <h2>Settings</h2>
+    <div class="field-row">
+      <label>Entry band, maximum
+        <span class="with-unit"><input type="number" step="0.1" min="0.1" max="25" name="max_distance_pct" id="setBand"><i>%</i></span>
+        <small class="muted">Show stocks from 0% up to this far below the trigger</small>
+      </label>
+      <label>Approaching band
+        <span class="with-unit"><input type="number" step="0.5" min="0.2" max="40" name="approach_pct" id="setApproach"><i>%</i></span>
+        <small class="muted">Second, wider watch list</small>
+      </label>
+    </div>
+    <div class="field-row">
+      <label>Entry buffer
+        <span class="with-unit"><input type="number" step="0.05" min="0" max="2" name="buffer_pct" id="setBuffer"><i>%</i></span>
+        <small class="muted">Above the alert candle high</small>
+      </label>
+      <label>Universe
+        <span class="with-unit"><input type="number" step="50" min="50" max="3000" name="top_n" id="setTop"><i>stocks</i></span>
+        <small class="muted">Top N by market cap</small>
+      </label>
+    </div>
+    <div class="field-row">
+      <label>Debt-to-equity ceiling
+        <input type="number" step="0.05" min="0" max="5" name="max_de" id="setDe">
+        <small class="muted">A candidate must be at or below this</small>
+      </label>
+      <label>Price history
+        <span class="with-unit"><input type="number" step="100" min="400" max="8000" name="history_days" id="setHistory"><i>days</i></span>
+        <small class="muted">Monthly candles are built from these</small>
+      </label>
+    </div>
+    <div class="field-row">
+      <label>Data source
+        <select name="source" id="setSource">
+          <option value="definedge">Definedge (automatic login)</option>
+          <option value="fyers">Fyers (daily token)</option>
+        </select>
+        <small class="muted">For bulk daily history. Live prices try Fyers first.</small>
+      </label>
+      <label>Re-scan automatically
+        <span class="with-unit"><input type="number" step="5" min="0" max="240" name="auto_scan_minutes" id="setAuto"><i>min</i></span>
+        <small class="muted">0 turns it off. Only while the market is open.</small>
+      </label>
+    </div>
+    <label class="check">
+      <input type="checkbox" name="low_debt_only" id="setLowDebt">
+      <span>Hide candidates that fail the debt test
+        <small class="muted">Unknown and lender balance sheets are always shown, flagged</small></span>
+    </label>
+    <div class="sheet-actions">
+      <button class="btn" type="button" data-close>Cancel</button>
+      <button class="btn primary" id="settingsSubmit" type="button">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
