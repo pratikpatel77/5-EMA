@@ -41,8 +41,23 @@ the friendlier reading alone. They legitimately differ: screener.in counts lease
 liabilities as borrowings, so it reads AstraZeneca at 0.11 where NSE reads 0.00.
 If screener.in has no figure, NSE alone decides, and the drawer says so.
 
-Banks, NBFCs and insurers are **flagged, never scored** — borrowings are a
-lender's raw material, not leverage. MarketLens also returns a flat zero for
+Banks, NBFCs and insurers are **not scored on debt-to-equity** — borrowings are a
+lender's raw material, not leverage. They are graded on asset quality instead,
+by **Net NPA** (bad loans left after provisions):
+
+| Net NPA | Grade |
+|---|---|
+| up to 0.5% | Clean book |
+| up to 1.5% | Sound book |
+| up to 3% | Watch NPAs |
+| above 3% | Stressed book |
+
+The stock's panel also shows Gross NPA, assets per rupee of equity, return on
+assets, return on equity and price/book. screener.in leaves NPAs blank on some
+consolidated pages, so the standalone page is read for them. A lender with no
+published NPA carries no grade. Lenders are never hidden by the debt ceiling.
+
+MarketLens also returns a flat zero for
 every ratio it has no data for, which is read as *unknown*, not as *no debt*.
 
 **4. Tracks what you take.** The entry defaults to the trigger price and you can

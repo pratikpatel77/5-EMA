@@ -64,21 +64,44 @@ function absorb(payload) {
 }
 
 /* ---------------------------------------------------------------- badges */
+// Net NPA is the lender's headline; gross NPA only when no net figure exists.
+function npaHeadline(lender) {
+  if (lender.net_npa_pct != null) return `NNPA ${lender.net_npa_pct.toFixed(2)}%`;
+  if (lender.gross_npa_pct != null) return `GNPA ${lender.gross_npa_pct.toFixed(2)}%`;
+  return '';
+}
+
 function debtBadge(row) {
   const verdict = row.debt_verdict || 'unknown';
   const debt = row.debt || {};
   const badge = el('span', `badge ${verdict}`);
   badge.append(el('i'));
   let text = row.debt_label || 'Debt unknown';
-  if (debt.de !== null && debt.de !== undefined && verdict !== 'unknown') {
-    text += `  ${debt.de.toFixed(2)}`;
+  const parts = [];
+  const lender = debt.lender;
+  if (debt.financial) {
+    // Debt to equity means nothing for a lender: show asset quality instead.
+    if (lender) {
+      const npa = npaHeadline(lender);
+      if (npa) text += `  ${npa}`;
+      parts.push(lender.kind);
+      if (lender.gross_npa_pct != null) parts.push(`gross NPA ${lender.gross_npa_pct.toFixed(2)}%`);
+      if (lender.net_npa_pct != null) parts.push(`net NPA ${lender.net_npa_pct.toFixed(2)}%`);
+      if (lender.leverage_x != null) parts.push(`assets / equity ${lender.leverage_x.toFixed(1)}x`);
+      if (lender.roa_pct != null) parts.push(`ROA ${lender.roa_pct.toFixed(2)}%`);
+      if (lender.roe_pct != null) parts.push(`ROE ${lender.roe_pct.toFixed(1)}%`);
+      if (lender.pb != null) parts.push(`P/B ${lender.pb.toFixed(2)}`);
+    }
+  } else {
+    if (debt.de !== null && debt.de !== undefined && verdict !== 'unknown') {
+      text += `  ${debt.de.toFixed(2)}`;
+    }
+    if (debt.de_nse !== null && debt.de_nse !== undefined) parts.push(`NSE ${debt.de_nse.toFixed(2)}`);
+    if (debt.de_screener !== null && debt.de_screener !== undefined) parts.push(`screener.in ${debt.de_screener.toFixed(2)}`);
+    if (debt.sector) parts.push(debt.sector);
+    if (debt.interest_cover) parts.push(`interest cover ${debt.interest_cover.toFixed(1)}x`);
   }
   badge.append(document.createTextNode(text));
-  const parts = [];
-  if (debt.de_nse !== null && debt.de_nse !== undefined) parts.push(`NSE ${debt.de_nse.toFixed(2)}`);
-  if (debt.de_screener !== null && debt.de_screener !== undefined) parts.push(`screener.in ${debt.de_screener.toFixed(2)}`);
-  if (debt.sector) parts.push(debt.sector);
-  if (debt.interest_cover) parts.push(`interest cover ${debt.interest_cover.toFixed(1)}x`);
   badge.title = parts.join(' · ') || 'No debt figure yet -- open the stock to fetch it.';
   return badge;
 }
@@ -586,7 +609,7 @@ function candidateView(rows, settings, heading, note) {
 
   const columns = [
     { label: 'Stock', left: true },
-    { label: 'Debt', left: true, title: 'Debt to equity, the stricter of NSE MarketLens and screener.in' },
+    { label: 'Debt', left: true, title: 'Debt to equity, the stricter of NSE MarketLens and screener.in. Banks and lenders show net NPA instead.' },
     { label: 'Price' },
     { label: 'Trigger', title: 'Alert candle high plus the entry buffer' },
     { label: 'Away', title: 'How far price still has to rise' },
@@ -925,7 +948,11 @@ function renderDrawer(detail) {
     const top = el('div', 'src-row');
     const badge = el('span', `badge ${debt.verdict}`);
     badge.append(el('i'), document.createTextNode(debt.label || ''));
-    top.append(badge, el('b', '', debt.de === null || debt.de === undefined ? 'no figure' : `D/E ${debt.de.toFixed(2)}`));
+    const lender = debt.lender;
+    const headline = debt.financial
+      ? ((lender && npaHeadline(lender)) || 'no NPA figure')
+      : (debt.de === null || debt.de === undefined ? 'no figure' : `D/E ${debt.de.toFixed(2)}`);
+    top.append(badge, el('b', '', headline));
     debtCard.append(top);
     const row = (name, value, href) => {
       const line = el('div', 'src-row');
@@ -937,32 +964,60 @@ function renderDrawer(detail) {
       line.append(el('b', '', value));
       return line;
     };
-    debtCard.append(
-      row('NSE MarketLens', debt.de_nse === null || debt.de_nse === undefined ? '--' : debt.de_nse.toFixed(2), debt.nse_url),
-      row('screener.in', debt.de_screener === null || debt.de_screener === undefined ? '--' : debt.de_screener.toFixed(2), debt.screener_url),
-    );
-    if (debt.interest_cover) debtCard.append(row('Interest cover', `${debt.interest_cover.toFixed(1)}x`));
-    if (debt.roce_pct) debtCard.append(row('ROCE', `${debt.roce_pct.toFixed(1)}%`));
+    const pct = (v, d = 2) => (v == null ? '--' : `${v.toFixed(d)}%`);
+    if (debt.financial) {
+      if (lender) {
+        debtCard.append(
+          row('Type', lender.kind),
+          row('Gross NPA', pct(lender.gross_npa_pct)),
+          row('Net NPA', pct(lender.net_npa_pct)),
+          row('Assets / equity', lender.leverage_x == null ? '--' : `${lender.leverage_x.toFixed(1)}x`),
+          row('Return on assets', pct(lender.roa_pct)),
+          row('Return on equity', pct(lender.roe_pct, 1)),
+          row('Price / book', lender.pb == null ? '--' : lender.pb.toFixed(2)),
+        );
+      }
+      debtCard.append(row('NSE MarketLens', 'open', debt.nse_url), row('screener.in', 'open', debt.screener_url));
+    } else {
+      debtCard.append(
+        row('NSE MarketLens', debt.de_nse === null || debt.de_nse === undefined ? '--' : debt.de_nse.toFixed(2), debt.nse_url),
+        row('screener.in', debt.de_screener === null || debt.de_screener === undefined ? '--' : debt.de_screener.toFixed(2), debt.screener_url),
+      );
+      if (debt.interest_cover) debtCard.append(row('Interest cover', `${debt.interest_cover.toFixed(1)}x`));
+      if (debt.roce_pct) debtCard.append(row('ROCE', `${debt.roce_pct.toFixed(1)}%`));
+    }
     if (debt.promoter_pct) debtCard.append(row('Promoter holding', `${debt.promoter_pct.toFixed(1)}%`));
     if (debt.market_cap_cr) debtCard.append(row('Market cap', `${nf0.format(debt.market_cap_cr)} Cr`));
     if (debt.financial) {
       debtCard.append(el('p', 'callout warn',
-        'A lender\'s balance sheet: borrowings are its raw material, so debt to equity does not mean what it means elsewhere. Judge this one yourself.'));
+        'A lender: borrowings and deposits are its raw material, so debt to equity is not used. ' +
+        'It is graded on net NPA instead (up to 0.5% clean, 1.5% sound, 3% watch, above that stressed).'));
+      if (!lender) {
+        debtCard.append(el('p', 'callout quiet', 'Lender ratios load on the next check. Press Re-check now.'));
+      } else if (lender.net_npa_pct == null && lender.gross_npa_pct == null) {
+        debtCard.append(el('p', 'callout quiet', 'No NPA figure is published for this one, so it carries no grade. Read leverage, ROA and ROE above.'));
+      } else {
+        const note = [lender.npa_period && `NPAs are for ${lender.npa_period}`,
+                      lender.npa_basis && `${lender.npa_basis} accounts`].filter(Boolean).join(', ');
+        if (note) debtCard.append(el('p', 'muted small', note + '. Return on assets uses trailing profit over the latest total assets.'));
+      }
     }
-    if (debt.disagree) {
+    if (debt.disagree && !debt.financial) {
       debtCard.append(el('p', 'callout quiet',
         'The two sources disagree by more than 0.15. The stricter figure is used. screener.in counts lease liabilities as borrowings; NSE does not.'));
     }
     const hasNse = debt.de_nse !== null && debt.de_nse !== undefined;
     const hasScr = debt.de_screener !== null && debt.de_screener !== undefined;
-    if (hasNse && !hasScr) {
+    if (debt.financial) {
+      // the D/E source notes below do not apply to a lender
+    } else if (hasNse && !hasScr) {
       debtCard.append(el('p', 'callout quiet',
         'screener.in had no figure for this one, so the verdict rests on NSE MarketLens alone.'));
     } else if (!hasNse && hasScr) {
       debtCard.append(el('p', 'callout quiet',
         'NSE MarketLens had no figure, so the verdict rests on screener.in alone.'));
     }
-    if (debt.errors && debt.errors.length) {
+    if (debt.errors && debt.errors.length && !debt.financial) {
       debtCard.append(el('p', 'muted small', debt.errors.join(' · ')));
     }
     const refresh = el('button', 'btn small ghost', 'Re-check now');
