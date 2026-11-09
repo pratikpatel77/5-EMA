@@ -21,7 +21,8 @@ DEFAULTS = {
     "max_distance_pct": 2.0,      # the watch band: 0% .. this, below the trigger
     "approach_pct": 6.0,          # second, wider band shown as "approaching"
     "max_de": 0.25,               # debt-to-equity ceiling for a candidate
-    "low_debt_only": True,        # hide rows that fail the debt test
+    "max_nnpa": 1.0,              # Net NPA % ceiling for a bank / NBFC candidate
+    "low_debt_only": True,        # hide rows that fail, or lack, the debt test
     "debt_ttl_days": 7.0,
     "auto_scan_minutes": 0,       # 0 = manual scans only
 }
@@ -81,7 +82,7 @@ class Store:
                 raise ValueError(f"{key} is not a valid value.") from None
         bounds = {"top_n": (50, 3000), "history_days": (400, 8000), "buffer_pct": (0.0, 2.0),
                   "max_distance_pct": (0.1, 25.0), "approach_pct": (0.2, 40.0),
-                  "max_de": (0.0, 5.0), "debt_ttl_days": (0.5, 90.0),
+                  "max_de": (0.0, 5.0), "max_nnpa": (0.0, 20.0), "debt_ttl_days": (0.5, 90.0),
                   "auto_scan_minutes": (0, 240)}
         for key, (low, high) in bounds.items():
             if key in clean and not low <= clean[key] <= high:

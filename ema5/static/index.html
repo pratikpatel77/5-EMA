@@ -196,14 +196,18 @@
     <div class="field-row">
       <label>Debt-to-equity ceiling
         <input type="number" step="0.05" min="0" max="5" name="max_de" id="setDe">
-        <small class="muted">A candidate must be at or below this</small>
+        <small class="muted">Ordinary companies: at or below this</small>
       </label>
+      <label>Net NPA ceiling
+        <span class="with-unit"><input type="number" step="0.1" min="0" max="20" name="max_nnpa" id="setNpa"><i>%</i></span>
+        <small class="muted">Banks and NBFCs: at or below this</small>
+      </label>
+    </div>
+    <div class="field-row">
       <label>Price history
         <span class="with-unit"><input type="number" step="100" min="400" max="8000" name="history_days" id="setHistory"><i>days</i></span>
         <small class="muted">Monthly candles are built from these</small>
       </label>
-    </div>
-    <div class="field-row">
       <label>Data source
         <select name="source" id="setSource">
           <option value="definedge">Definedge (automatic login)</option>
@@ -211,6 +215,8 @@
         </select>
         <small class="muted">For bulk daily history. Live prices try Fyers first.</small>
       </label>
+    </div>
+    <div class="field-row">
       <label>Re-scan automatically
         <span class="with-unit"><input type="number" step="5" min="0" max="240" name="auto_scan_minutes" id="setAuto"><i>min</i></span>
         <small class="muted">0 turns it off. Only while the market is open.</small>
@@ -218,8 +224,8 @@
     </div>
     <label class="check">
       <input type="checkbox" name="low_debt_only" id="setLowDebt">
-      <span>Hide candidates that fail the debt test
-        <small class="muted">Unknown and lender balance sheets are always shown, flagged</small></span>
+      <span>Show only stocks that pass the debt test
+        <small class="muted">A stock with no debt data is skipped too</small></span>
     </label>
     <div class="sheet-actions">
       <button class="btn" type="button" data-close>Cancel</button>

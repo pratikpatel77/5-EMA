@@ -213,6 +213,10 @@ td .sub { display: block; font-size: 11px; color: var(--muted); font-variant-num
 .badge.low { color: var(--ink-2); }
 .badge.moderate { color: var(--serious); border-color: color-mix(in srgb, var(--serious) 40%, transparent); }
 .badge.high { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 40%, transparent); }
+.badge.lender_clean { color: var(--good-text); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
+.badge.lender_sound { color: var(--good-text); border-color: color-mix(in srgb, var(--good) 28%, transparent); }
+.badge.lender_watch { color: var(--serious); border-color: color-mix(in srgb, var(--serious) 40%, transparent); }
+.badge.lender_stressed { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 40%, transparent); }
 .badge.financial, .badge.unknown { color: var(--muted); border-style: dashed; }
 .badge.open { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .badge.stopped { color: var(--critical); border-color: color-mix(in srgb, var(--critical) 40%, transparent); }

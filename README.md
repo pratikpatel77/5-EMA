@@ -28,22 +28,44 @@ below the trigger. A stock that has already crossed its trigger drops off — th
 entry has happened. A second, wider list ("Approaching", 6% by default) gives you
 some warning. Both bands are adjustable.
 
-**3. Checks the debt.** Only when a stock reaches the narrow band, so a normal
-day is a handful of lookups. Two sources, cached for a week:
+**3. Checks the debt, early.** As soon as a stock is in the **approaching** band, so
+it is already vetted by the time it reaches the trigger. Cached for a week (debt
+moves with quarterly results, not price). **One source per stock** is stored and
+shown:
 
-| Source | What it gives |
+| Order | Source | Used for |
+|---|---|---|
+| 1st | [screener.in](https://www.screener.in) | Borrowings ÷ (Equity Capital + Reserves) off the balance sheet; NPAs, ROA, ROE and P/B for lenders |
+| fallback | [NSE MarketLens](https://marketlens.nseindia.com/screener) | `debtToEquity`, only for an ordinary company screener.in has no figure for |
+
+The drawer names the source. If neither has a usable figure the stock is
+**unknown and skipped** — never shown with a question mark. MarketLens returns a
+flat zero for every ratio it has no data for, which counts as unknown, not as
+*no debt*. A cold first scan is slower (about 1–3 requests per stock, spaced out);
+after that it is a week of cache.
+
+**Ordinary companies** must be at or below the **debt-to-equity ceiling** (0.25).
+
+**Banks, NBFCs and insurers** are not scored on debt-to-equity — borrowings are a
+lender's raw material, not leverage. They are judged on **Net NPA** (bad loans
+left after provisions) and must be at or below the **Net NPA ceiling** (1.0% by
+default). A grade is shown for context:
+
+| Net NPA | Grade |
 |---|---|
-| [NSE MarketLens](https://marketlens.nseindia.com/screener) | `debtToEquity` straight from NSE, plus interest cover, ROCE, promoter holding |
-| [screener.in](https://www.screener.in) | Borrowings ÷ (Equity Capital + Reserves) off the balance sheet |
+| up to 0.5% | Clean book |
+| up to 1.5% | Sound book |
+| up to 3% | Watch NPAs |
+| above 3% | Stressed book |
 
-The **stricter of the two** decides the verdict, so nothing is called debt-free on
-the friendlier reading alone. They legitimately differ: screener.in counts lease
-liabilities as borrowings, so it reads AstraZeneca at 0.11 where NSE reads 0.00.
-If screener.in has no figure, NSE alone decides, and the drawer says so.
+The stock's panel also shows Gross NPA, assets per rupee of equity, return on
+assets, return on equity and price/book. screener.in leaves NPAs blank on some
+consolidated pages, so the standalone page is read for them, and an NPA older
+than two quarters is not used. A lender with no Net NPA figure is unknown.
 
-Banks, NBFCs and insurers are **flagged, never scored** — borrowings are a
-lender's raw material, not leverage. MarketLens also returns a flat zero for
-every ratio it has no data for, which is read as *unknown*, not as *no debt*.
+With the filter on (the default), **only stocks that pass are listed**. The ones
+skipped are named under the table with the reason, e.g. `UPL (D/E 0.98)` or
+`XYZ (no debt data)`. Turn the filter off in Settings to see everything.
 
 **4. Tracks what you take.** The entry defaults to the trigger price and you can
 replace it with your actual fill. From there it replays the trade day by day:
@@ -113,7 +135,7 @@ old. Otherwise the last daily close stands in.
 - **Ignored** — skipped for *that* alert candle. A fresh alert candle on the same
   stock brings it back by itself.
 
-Click any row for the monthly candle chart, the 5 EMA, both debt sources and the
+Click any row for the monthly candle chart, the 5 EMA, the debt check and the
 full ladder.
 
 ---
@@ -121,7 +143,7 @@ full ladder.
 ## Settings
 
 Entry band, approaching band, entry buffer, universe size, debt-to-equity ceiling,
-price history, data source, and an optional automatic re-scan (off by default;
+Net NPA ceiling, price history, data source, and an optional automatic re-scan (off by default;
 only runs while the market is open).
 
 ---
@@ -132,13 +154,13 @@ only runs while the market is open).
 ema5/
   strategy.py      the rules -- pure functions, no network, fully tested
   service.py       scanning, tracking, the payload the page renders
-  fundamentals.py  the two debt sources, cached
+  fundamentals.py  debt / lender check (screener.in, NSE fallback), cached
   quotes.py        live prices (Fyers, then Definedge)
   store.py         settings and tracked entries (.cache/state.json)
   bridge.py        finds the pattern-scanners data layer
   server.py        loopback-only HTTP server
   static/          the dashboard
-tests/             29 tests over the rules
+tests/             85 tests: the rules, the debt check and the filter
 ```
 
 The server binds to 127.0.0.1, refuses any other Host or Origin, and requires a
