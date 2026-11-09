@@ -9,7 +9,7 @@ Two loops, because they cost very different amounts:
                  trades) and the numbers derived from them. Seconds, so it
                  can run while you watch.
 
-Debt is looked up only for stocks that reach the band, once a week each.
+Debt is looked up for every stock in the approaching band, once a week each.
 """
 from __future__ import annotations
 
@@ -299,8 +299,8 @@ class Desk:
                                                        "as_of": setup.get("last_bar")}
 
     def _fill_debt(self, settings: dict):
-        """One lookup per stock that has reached the narrow band."""
-        band = float(settings["max_distance_pct"])
+        """One lookup per stock in the approaching band, so it is known before the trigger."""
+        band = float(settings["approach_pct"])
         hot = []
         for symbol, setup in self._setups.items():
             if setup.get("status") != strategy.STATUS_PENDING:
@@ -309,7 +309,7 @@ class Desk:
             distance = strategy.distance_pct(setup["trigger"], price)
             if distance is not None and -0.5 <= distance <= band:
                 hot.append(symbol)
-        for symbol in hot[:40]:
+        for symbol in hot[:120]:
             try:
                 self.debt.get(symbol)
             except Exception:
@@ -324,6 +324,7 @@ class Desk:
         record = self.debt.cached(symbol)
         verdict = (record or {}).get("verdict", "unknown")
         key = entry_id(symbol, setup["alert_month"])
+        passed, why = self.debt.judge(record, float(settings["max_de"]), float(settings["max_nnpa"]))
         return {
             "id": key,
             "symbol": symbol,
@@ -347,7 +348,8 @@ class Desk:
             "debt": record,
             "debt_verdict": verdict,
             "debt_label": VERDICTS.get(verdict, VERDICTS["unknown"])[0],
-            "debt_pass": self.debt.passes(record, float(settings["max_de"])),
+            "debt_pass": passed,
+            "debt_why": why,
             "reward_2r": setup["trigger"] + 2 * setup["risk"],
             "reward_3r": setup["trigger"] + 3 * setup["risk"],
         }
@@ -445,12 +447,17 @@ class Desk:
             if distance is None:
                 continue
             if 0 <= distance <= band:
-                if settings["low_debt_only"] and row["debt_pass"] is False:
-                    hidden_debt.append(row)
-                else:
-                    candidates.append(row)
+                view, rows = "candidates", candidates
             elif band < distance <= reach:
-                approaching.append(row)
+                view, rows = "approaching", approaching
+            else:
+                continue
+            # With the debt filter on, only a stock that PASSES is shown: a
+            # failing or unknown one is skipped and listed under the table.
+            if settings["low_debt_only"] and row["debt_pass"] is not True:
+                hidden_debt.append({**row, "view": view})
+            else:
+                rows.append(row)
 
         candidates.sort(key=lambda r: r["distance_pct"])
         approaching.sort(key=lambda r: r["distance_pct"])

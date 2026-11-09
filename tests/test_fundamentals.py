@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ema5 import fundamentals as F  # noqa: E402
 
 
-def page(*, borrow_label="Borrowings", sector="Finance Financial Institution",
+def page(*, borrow_label="Borrowings", sector="Financial Services Financial Services Finance Financial Institution",
          npa=None, net_profit=("4,034", "4,456")):
     """A screener.in page cut down to the parts the parser reads."""
     npa_rows = ""
@@ -27,7 +27,7 @@ def page(*, borrow_label="Borrowings", sector="Finance Financial Institution",
       <li><span class="name">ROCE</span><span class="value">8.41 %</span></li>
       <li><span class="name">ROE</span><span class="value">20.0 %</span></li>
     </ul>
-    <section id="peers"><p class="sub">Financial Services {sector}</p></section>
+    <section id="peers"><p class="sub">{sector}</p></section>
     <section id="quarters"><table><thead><tr><th></th><th>Jun 2026</th><th>Sep 2026</th></tr></thead>
       <tbody>{npa_rows}</tbody></table></section>
     <section id="balance-sheet"><table><thead><tr><th></th><th>Mar 2026</th><th>Sep 2026</th></tr></thead><tbody>
@@ -99,27 +99,20 @@ def test_lender_figures_from_the_page():
 
 # ---- grading -----------------------------------------------------------------
 def test_net_npa_grades():
-    assert F.classify_lender(0.04, 0.71) == "lender_clean"
-    assert F.classify_lender(0.5, None) == "lender_clean"
-    assert F.classify_lender(0.51, None) == "lender_sound"
-    assert F.classify_lender(1.5, None) == "lender_sound"
-    assert F.classify_lender(2.0, None) == "lender_watch"
-    assert F.classify_lender(3.01, None) == "lender_stressed"
+    assert F.classify_lender(0.04) == "lender_clean"
+    assert F.classify_lender(0.5) == "lender_clean"
+    assert F.classify_lender(0.51) == "lender_sound"
+    assert F.classify_lender(1.5) == "lender_sound"
+    assert F.classify_lender(2.0) == "lender_watch"
+    assert F.classify_lender(3.01) == "lender_stressed"
 
 
-def test_gross_npa_used_only_when_there_is_no_net_figure():
-    assert F.classify_lender(None, 1.0) == "lender_clean"
-    assert F.classify_lender(None, 7.0) == "lender_stressed"
-    # net wins even when gross looks bad
-    assert F.classify_lender(0.2, 9.0) == "lender_clean"
-
-
-def test_no_npa_at_all_is_ungraded():
-    assert F.classify_lender(None, None) == "financial"
+def test_no_net_npa_is_unknown_even_if_gross_is_published():
+    assert F.classify_lender(None) == "unknown"
 
 
 def test_every_verdict_has_a_label():
-    for key in ("lender_clean", "lender_sound", "lender_watch", "lender_stressed", "financial"):
+    for key in ("lender_clean", "lender_sound", "lender_watch", "lender_stressed", "unknown"):
         assert key in F.VERDICTS and key in F.ORDER
 
 
@@ -130,22 +123,25 @@ def test_kind_from_sector_line():
     assert F.lender_kind("Financial Services Capital Markets Exchange and Data Platform") == "Other financial"
 
 
-def test_profile_computes_leverage_roa_and_falls_back_to_nse():
+def test_profile_computes_leverage_and_roa_from_screener():
     scr = F.parse_screener(page(npa=("0.71%", "0.04%")), "u")
-    profile = F.lender_profile({"roa_pct": 9.9, "roe_pct": 1.0, "pb": 2.0}, scr, "Finance")
-    assert profile["leverage_x"] == 8.5            # 195,035 / 22,957 = 8.4958
+    profile = F.lender_profile(scr, "Finance")
+    assert profile["leverage_x"] == 8.5             # 195,035 / 22,957 = 8.4958
     assert profile["roa_pct"] == 2.28               # 4,456 / 195,035
-    assert profile["roe_pct"] == 20.0 and profile["pb"] == 1.43   # screener wins
-    assert profile["net_npa_pct"] == 0.04
-    bare = F.lender_profile({"roa_pct": 2.42, "roe_pct": 15.0, "pb": 2.0}, {}, "Banks")
-    assert bare["roa_pct"] == 2.42 and bare["roe_pct"] == 15.0 and bare["pb"] == 2.0
-    assert bare["leverage_x"] is None and bare["kind"] == "Bank"
+    assert profile["roe_pct"] == 20.0 and profile["pb"] == 1.43
+    assert profile["net_npa_pct"] == 0.04 and profile["kind"] == "NBFC"
 
 
 # ---- whole-record behaviour ----------------------------------------------------
 def make_book(tmp_path, monkeypatch, nse, consolidated, standalone=None):
     book = F.DebtBook(tmp_path / "debt.json")
-    monkeypatch.setattr(book, "_marketlens", lambda symbol: nse)
+    calls = {"nse": 0}
+
+    def marketlens(symbol):
+        calls["nse"] += 1
+        return nse
+
+    monkeypatch.setattr(book, "_marketlens", marketlens)
     pages = {"/consolidated/": consolidated, "/": standalone}
 
     class Resp:
@@ -157,22 +153,24 @@ def make_book(tmp_path, monkeypatch, nse, consolidated, standalone=None):
         return Resp(pages[key], url)
 
     monkeypatch.setattr(book, "_fetch", fake_fetch)
+    book.calls = calls
     return book
 
 
-def test_hudco_is_graded_on_npa_not_debt_to_equity(tmp_path, monkeypatch):
-    nse = F.parse_marketlens({"ticker": "HUDCO", "sector": "Finance", "debtToEquity": 6.45,
-                              "roce": 7.29, "interestCover": 1.36, "roa": 2.42})
+def test_hudco_is_graded_on_net_npa_from_one_source(tmp_path, monkeypatch):
+    nse = F.parse_marketlens({"ticker": "HUDCO", "sector": "Finance", "debtToEquity": 6.45})
     book = make_book(tmp_path, monkeypatch, nse,
                      consolidated=page(borrow_label="Borrowing", npa=("", "")),
                      standalone=page(borrow_label="Borrowing", npa=("0.71%", "0.04%")))
     record = book.refresh("HUDCO")
     assert record["financial"] is True
     assert record["verdict"] == "lender_clean"
+    assert record["source"] == "screener.in"
+    assert record["de"] is None                      # D/E is not used for a lender
     assert record["lender"]["net_npa_pct"] == 0.04
     assert record["lender"]["npa_basis"] == "standalone"
-    assert record["lender"]["leverage_x"] == 8.5
-    assert book.passes(record, 0.25) is None        # never hidden by the D/E ceiling
+    assert book.calls["nse"] == 0                    # no second source consulted
+    assert "de_nse" not in record and "de_screener" not in record
 
 
 def test_consolidated_npa_is_used_without_a_second_page(tmp_path, monkeypatch):
@@ -185,37 +183,86 @@ def test_consolidated_npa_is_used_without_a_second_page(tmp_path, monkeypatch):
     assert record["lender"]["npa_basis"] == "consolidated"
 
 
-def test_lender_without_any_npa_is_ungraded_but_still_has_ratios(tmp_path, monkeypatch):
+def test_lender_without_net_npa_is_unknown_and_has_no_source(tmp_path, monkeypatch):
     nse = F.parse_marketlens({"ticker": "X", "sector": "Finance"})
     book = make_book(tmp_path, monkeypatch, nse,
                      consolidated=page(borrow_label="Borrowing", npa=("", "")),
                      standalone=page(borrow_label="Borrowing", npa=("", "")))
     record = book.refresh("X")
-    assert record["verdict"] == "financial"
-    assert record["lender"]["net_npa_pct"] is None
-    assert record["lender"]["npa_basis"] is None
-    assert record["lender"]["roa_pct"] == 2.28
+    assert record["verdict"] == "unknown" and record["source"] is None
+    assert book.judge(record, 0.25, 1.0) == (None, "no net NPA data")
 
 
-def test_ordinary_company_is_still_scored_on_debt_to_equity(tmp_path, monkeypatch):
+def test_ordinary_company_uses_screener_and_never_asks_nse(tmp_path, monkeypatch):
     nse = F.parse_marketlens({"ticker": "CROMPTON", "sector": "Consumer Durables",
                               "debtToEquity": 0.07, "roce": 20.0})
     book = make_book(tmp_path, monkeypatch, nse,
-                     consolidated=page(sector="Consumer Durables Electricals"))
+                     consolidated=page(sector="Consumer Discretionary Consumer Durables Consumer Electronics"))
     record = book.refresh("CROMPTON")
     assert record["financial"] is False and record["lender"] is None
-    assert record["verdict"] in ("very_low", "high")  # D/E ladder, not a lender grade
+    assert record["source"] == "screener.in"
+    assert record["de"] == round(165159 / 22957, 6) or abs(record["de"] - 165159 / 22957) < 1e-9
     assert not record["verdict"].startswith("lender")
+    assert book.calls["nse"] == 0
 
 
-def test_old_cached_lender_record_is_refetched(tmp_path):
+def test_nse_is_the_fallback_when_screener_has_no_figure(tmp_path, monkeypatch):
+    nse = F.parse_marketlens({"ticker": "Y", "sector": "Chemicals", "debtToEquity": 0.30, "roce": 12.0,
+                              "name": "Y Ltd"})
+    book = make_book(tmp_path, monkeypatch, nse, consolidated=None, standalone=None)
+    record = book.refresh("Y")
+    assert record["source"] == "NSE MarketLens"
+    assert record["de"] == 0.30 and record["verdict"] == "low"
+    assert record["name"] == "Y Ltd"
+    assert "screener.in" in " ".join(record["errors"])
+
+
+def test_nothing_usable_anywhere_is_unknown(tmp_path, monkeypatch):
+    nse = F.parse_marketlens({"ticker": "Z", "sector": "Chemicals"})   # all zeros = no data
+    book = make_book(tmp_path, monkeypatch, nse, consolidated=None, standalone=None)
+    record = book.refresh("Z")
+    assert record["verdict"] == "unknown" and record["source"] is None and record["de"] is None
+    assert book.judge(record, 0.25, 1.0) == (None, "no debt data")
+
+
+def test_a_lender_found_only_by_nse_is_unknown_not_scored(tmp_path, monkeypatch):
+    nse = F.parse_marketlens({"ticker": "B", "sector": "Banks", "debtToEquity": 0.9, "roce": 7.0})
+    book = make_book(tmp_path, monkeypatch, nse, consolidated=None, standalone=None)
+    record = book.refresh("B")
+    assert record["financial"] is True and record["verdict"] == "unknown"
+
+
+# ---- the filter ---------------------------------------------------------------
+def test_judge_uses_de_for_companies_and_net_npa_for_lenders():
+    book = F.DebtBook(Path("/nonexistent/debt.json"))
+    company = {"financial": False, "verdict": "low", "de": 0.20}
+    assert book.judge(company, 0.25, 1.0) == (True, "D/E 0.20")
+    assert book.judge({**company, "de": 0.55}, 0.25, 1.0) == (False, "D/E 0.55")
+    lender = {"financial": True, "verdict": "lender_sound", "de": None,
+              "lender": {"net_npa_pct": 0.9}}
+    assert book.judge(lender, 0.25, 1.0) == (True, "net NPA 0.90%")
+    assert book.judge(lender, 0.25, 0.5) == (False, "net NPA 0.90%")
+    assert book.judge(None, 0.25, 1.0) == (None, "not checked yet")
+    # a graded lender is never measured against the D/E ceiling
+    assert book.judge({**lender, "de": 7.0}, 0.25, 1.0)[0] is True
+
+
+def test_record_in_an_older_shape_is_refetched(tmp_path):
     import json, time
     path = tmp_path / "debt.json"
     path.write_text(json.dumps({"companies": {
-        "HUDCO": {"symbol": "HUDCO", "financial": True, "verdict": "financial", "de": 6.45,
-                  "fetched_at_ts": time.time()},
-        "TCS": {"symbol": "TCS", "financial": False, "verdict": "zero", "de": 0.0,
+        "OLD": {"symbol": "OLD", "verdict": "zero", "de": 0.0, "fetched_at_ts": time.time()},
+        "NEW": {"v": F.RECORD_VERSION, "symbol": "NEW", "verdict": "zero", "de": 0.0,
                 "fetched_at_ts": time.time()}}}))
     book = F.DebtBook(path)
-    assert book.cached("HUDCO")["stale"] is True
-    assert book.cached("TCS")["stale"] is False
+    assert book.cached("OLD")["stale"] is True
+    assert book.cached("NEW")["stale"] is False
+
+
+def test_a_known_lender_is_not_refetched_on_every_scan(tmp_path, monkeypatch):
+    nse = F.parse_marketlens({"ticker": "PFC", "sector": "Finance"})
+    book = make_book(tmp_path, monkeypatch, nse,
+                     consolidated=page(borrow_label="Borrowing", npa=("0.66%", "0.13%")))
+    first = book.get("PFC")
+    monkeypatch.setattr(book, "refresh", lambda s: (_ for _ in ()).throw(AssertionError("refetched")))
+    assert book.get("PFC")["verdict"] == first["verdict"]

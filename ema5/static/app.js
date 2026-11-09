@@ -64,13 +64,6 @@ function absorb(payload) {
 }
 
 /* ---------------------------------------------------------------- badges */
-// Net NPA is the lender's headline; gross NPA only when no net figure exists.
-function npaHeadline(lender) {
-  if (lender.net_npa_pct != null) return `NNPA ${lender.net_npa_pct.toFixed(2)}%`;
-  if (lender.gross_npa_pct != null) return `GNPA ${lender.gross_npa_pct.toFixed(2)}%`;
-  return '';
-}
-
 function debtBadge(row) {
   const verdict = row.debt_verdict || 'unknown';
   const debt = row.debt || {};
@@ -82,8 +75,7 @@ function debtBadge(row) {
   if (debt.financial) {
     // Debt to equity means nothing for a lender: show asset quality instead.
     if (lender) {
-      const npa = npaHeadline(lender);
-      if (npa) text += `  ${npa}`;
+      if (lender.net_npa_pct != null) text += `  NNPA ${lender.net_npa_pct.toFixed(2)}%`;
       parts.push(lender.kind);
       if (lender.gross_npa_pct != null) parts.push(`gross NPA ${lender.gross_npa_pct.toFixed(2)}%`);
       if (lender.net_npa_pct != null) parts.push(`net NPA ${lender.net_npa_pct.toFixed(2)}%`);
@@ -93,14 +85,10 @@ function debtBadge(row) {
       if (lender.pb != null) parts.push(`P/B ${lender.pb.toFixed(2)}`);
     }
   } else {
-    if (debt.de !== null && debt.de !== undefined && verdict !== 'unknown') {
-      text += `  ${debt.de.toFixed(2)}`;
-    }
-    if (debt.de_nse !== null && debt.de_nse !== undefined) parts.push(`NSE ${debt.de_nse.toFixed(2)}`);
-    if (debt.de_screener !== null && debt.de_screener !== undefined) parts.push(`screener.in ${debt.de_screener.toFixed(2)}`);
+    if (debt.de !== null && debt.de !== undefined && verdict !== 'unknown') text += `  ${debt.de.toFixed(2)}`;
     if (debt.sector) parts.push(debt.sector);
-    if (debt.interest_cover) parts.push(`interest cover ${debt.interest_cover.toFixed(1)}x`);
   }
+  if (debt.source) parts.push(`source: ${debt.source}`);
   badge.append(document.createTextNode(text));
   badge.title = parts.join(' · ') || 'No debt figure yet -- open the stock to fetch it.';
   return badge;
@@ -591,7 +579,7 @@ function symbolCell(tr, row, sub) {
   tr.append(td);
 }
 
-function candidateView(rows, settings, heading, note) {
+function candidateView(rows, settings, heading, note, view) {
   const panel = document.createDocumentFragment();
   const head = el('div', 'panel-head');
   const left = el('div');
@@ -599,17 +587,29 @@ function candidateView(rows, settings, heading, note) {
   head.append(left);
   panel.append(head);
 
+  const hiddenNote = () => {
+    const hidden = (state.data.hidden_by_debt || []).filter((r) => r.view === view);
+    if (!hidden.length || !settings.low_debt_only) return null;
+    const note = el('p', 'muted small');
+    note.style.padding = '10px 16px';
+    note.textContent = `${hidden.length} stock(s) skipped by the debt filter: ` +
+      hidden.map((r) => `${r.symbol} (${r.debt_why})`).join(', ');
+    return note;
+  };
+
   if (!rows.length) {
     panel.append(emptyState('Nothing here right now',
       state.data.scan.status === 'idle'
         ? 'Run a scan to read the monthly candles.'
-        : 'No stock is inside this band. The desk re-checks every scan.'));
+        : 'No stock is inside this band that passes the debt filter. The desk re-checks every scan.'));
+    const skipped = hiddenNote();
+    if (skipped) panel.append(skipped);
     return panel;
   }
 
   const columns = [
     { label: 'Stock', left: true },
-    { label: 'Debt', left: true, title: 'Debt to equity, the stricter of NSE MarketLens and screener.in. Banks and lenders show net NPA instead.' },
+    { label: 'Debt', left: true, title: 'Debt to equity. Banks and NBFCs show net NPA instead. One source per stock.' },
     { label: 'Price' },
     { label: 'Trigger', title: 'Alert candle high plus the entry buffer' },
     { label: 'Away', title: 'How far price still has to rise' },
@@ -644,13 +644,8 @@ function candidateView(rows, settings, heading, note) {
     cell(tr, actions);
   }, (row) => openDrawer(row.symbol)));
 
-  if (state.data.hidden_by_debt.length && settings.low_debt_only) {
-    const note2 = el('p', 'muted small');
-    note2.style.padding = '10px 16px';
-    note2.textContent = `${state.data.hidden_by_debt.length} stock(s) in the band are hidden because their debt is above ${settings.max_de}: ` +
-      state.data.hidden_by_debt.map((r) => `${r.symbol} (${r.debt && r.debt.de ? r.debt.de.toFixed(2) : '?'})`).join(', ');
-    panel.append(note2);
-  }
+  const skipped = hiddenNote();
+  if (skipped) panel.append(skipped);
   return panel;
 }
 
@@ -838,10 +833,10 @@ function render() {
   panel.replaceChildren();
   if (state.view === 'candidates') {
     panel.append(candidateView(data.candidates, s, 'At the trigger',
-      `Alert candle in force, price within ${s.max_distance_pct}% below the trigger, debt at or below ${s.max_de}.`));
+      `Alert candle in force, price within ${s.max_distance_pct}% below the trigger, debt to equity at or below ${s.max_de} (banks and NBFCs: net NPA at or below ${s.max_nnpa}%).`, 'candidates'));
   } else if (state.view === 'approaching') {
     panel.append(candidateView(data.approaching, s, 'Approaching',
-      `Between ${s.max_distance_pct}% and ${s.approach_pct}% below the trigger. Debt is checked once a stock enters the narrow band.`));
+      `Between ${s.max_distance_pct}% and ${s.approach_pct}% below the trigger. Debt is checked from here, so a stock is already vetted when it reaches the trigger.`, 'approaching'));
   } else if (state.view === 'positions') {
     panel.append(positionsView(data.positions));
   } else if (state.view === 'closed') {
@@ -950,7 +945,7 @@ function renderDrawer(detail) {
     badge.append(el('i'), document.createTextNode(debt.label || ''));
     const lender = debt.lender;
     const headline = debt.financial
-      ? ((lender && npaHeadline(lender)) || 'no NPA figure')
+      ? (lender && lender.net_npa_pct != null ? `NNPA ${lender.net_npa_pct.toFixed(2)}%` : 'no net NPA')
       : (debt.de === null || debt.de === undefined ? 'no figure' : `D/E ${debt.de.toFixed(2)}`);
     top.append(badge, el('b', '', headline));
     debtCard.append(top);
@@ -965,59 +960,39 @@ function renderDrawer(detail) {
       return line;
     };
     const pct = (v, d = 2) => (v == null ? '--' : `${v.toFixed(d)}%`);
-    if (debt.financial) {
-      if (lender) {
-        debtCard.append(
-          row('Type', lender.kind),
-          row('Gross NPA', pct(lender.gross_npa_pct)),
-          row('Net NPA', pct(lender.net_npa_pct)),
-          row('Assets / equity', lender.leverage_x == null ? '--' : `${lender.leverage_x.toFixed(1)}x`),
-          row('Return on assets', pct(lender.roa_pct)),
-          row('Return on equity', pct(lender.roe_pct, 1)),
-          row('Price / book', lender.pb == null ? '--' : lender.pb.toFixed(2)),
-        );
-      }
-      debtCard.append(row('NSE MarketLens', 'open', debt.nse_url), row('screener.in', 'open', debt.screener_url));
+    const crore = (v) => (v == null ? '--' : `${nf0.format(v)} Cr`);
+    if (debt.verdict === 'unknown') {
+      debtCard.append(el('p', 'callout quiet',
+        'Neither screener.in nor NSE MarketLens has a usable figure for this one, so the debt filter skips it.'));
+    } else if (debt.financial && lender) {
+      debtCard.append(
+        row('Type', lender.kind),
+        row('Gross NPA', pct(lender.gross_npa_pct)),
+        row('Net NPA', pct(lender.net_npa_pct)),
+        row('Assets / equity', lender.leverage_x == null ? '--' : `${lender.leverage_x.toFixed(1)}x`),
+        row('Return on assets', pct(lender.roa_pct)),
+        row('Return on equity', pct(lender.roe_pct, 1)),
+        row('Price / book', lender.pb == null ? '--' : lender.pb.toFixed(2)),
+      );
+      if (debt.market_cap_cr) debtCard.append(row('Market cap', crore(debt.market_cap_cr)));
+      const basis = [lender.npa_period && `NPAs are for ${lender.npa_period}`,
+                     lender.npa_basis && `${lender.npa_basis} accounts`].filter(Boolean).join(', ');
+      debtCard.append(el('p', 'muted small',
+        'A lender: its borrowings are raw material, so it is judged on net NPA, not debt to equity.' +
+        (basis ? ` ${basis}.` : '')));
     } else {
       debtCard.append(
-        row('NSE MarketLens', debt.de_nse === null || debt.de_nse === undefined ? '--' : debt.de_nse.toFixed(2), debt.nse_url),
-        row('screener.in', debt.de_screener === null || debt.de_screener === undefined ? '--' : debt.de_screener.toFixed(2), debt.screener_url),
+        row('Debt to equity', debt.de == null ? '--' : debt.de.toFixed(2)),
+        row('Borrowings', crore(debt.debt_cr)),
+        row('Net worth', crore(debt.networth_cr)),
       );
-      if (debt.interest_cover) debtCard.append(row('Interest cover', `${debt.interest_cover.toFixed(1)}x`));
       if (debt.roce_pct) debtCard.append(row('ROCE', `${debt.roce_pct.toFixed(1)}%`));
+      if (debt.market_cap_cr) debtCard.append(row('Market cap', crore(debt.market_cap_cr)));
     }
-    if (debt.promoter_pct) debtCard.append(row('Promoter holding', `${debt.promoter_pct.toFixed(1)}%`));
-    if (debt.market_cap_cr) debtCard.append(row('Market cap', `${nf0.format(debt.market_cap_cr)} Cr`));
-    if (debt.financial) {
-      debtCard.append(el('p', 'callout warn',
-        'A lender: borrowings and deposits are its raw material, so debt to equity is not used. ' +
-        'It is graded on net NPA instead (up to 0.5% clean, 1.5% sound, 3% watch, above that stressed).'));
-      if (!lender) {
-        debtCard.append(el('p', 'callout quiet', 'Lender ratios load on the next check. Press Re-check now.'));
-      } else if (lender.net_npa_pct == null && lender.gross_npa_pct == null) {
-        debtCard.append(el('p', 'callout quiet', 'No NPA figure is published for this one, so it carries no grade. Read leverage, ROA and ROE above.'));
-      } else {
-        const note = [lender.npa_period && `NPAs are for ${lender.npa_period}`,
-                      lender.npa_basis && `${lender.npa_basis} accounts`].filter(Boolean).join(', ');
-        if (note) debtCard.append(el('p', 'muted small', note + '. Return on assets uses trailing profit over the latest total assets.'));
-      }
+    if (debt.source) {
+      debtCard.append(row(`Source: ${debt.source}`, debt.period ? String(debt.period).slice(0, 10) : '', debt.source_url));
     }
-    if (debt.disagree && !debt.financial) {
-      debtCard.append(el('p', 'callout quiet',
-        'The two sources disagree by more than 0.15. The stricter figure is used. screener.in counts lease liabilities as borrowings; NSE does not.'));
-    }
-    const hasNse = debt.de_nse !== null && debt.de_nse !== undefined;
-    const hasScr = debt.de_screener !== null && debt.de_screener !== undefined;
-    if (debt.financial) {
-      // the D/E source notes below do not apply to a lender
-    } else if (hasNse && !hasScr) {
-      debtCard.append(el('p', 'callout quiet',
-        'screener.in had no figure for this one, so the verdict rests on NSE MarketLens alone.'));
-    } else if (!hasNse && hasScr) {
-      debtCard.append(el('p', 'callout quiet',
-        'NSE MarketLens had no figure, so the verdict rests on screener.in alone.'));
-    }
-    if (debt.errors && debt.errors.length && !debt.financial) {
+    if (debt.errors && debt.errors.length && debt.verdict === 'unknown') {
       debtCard.append(el('p', 'muted small', debt.errors.join(' · ')));
     }
     const refresh = el('button', 'btn small ghost', 'Re-check now');
@@ -1251,6 +1226,7 @@ function openSettings() {
   $('setBuffer').value = s.buffer_pct;
   $('setTop').value = s.top_n;
   $('setDe').value = s.max_de;
+  $('setNpa').value = s.max_nnpa;
   $('setHistory').value = s.history_days;
   $('setSource').value = s.source;
   $('setAuto').value = s.auto_scan_minutes;
@@ -1261,7 +1237,7 @@ function openSettings() {
 async function submitSettings() {
   const payload = {
     max_distance_pct: $('setBand').value, approach_pct: $('setApproach').value,
-    buffer_pct: $('setBuffer').value, top_n: $('setTop').value, max_de: $('setDe').value,
+    buffer_pct: $('setBuffer').value, top_n: $('setTop').value, max_de: $('setDe').value, max_nnpa: $('setNpa').value,
     history_days: $('setHistory').value, source: $('setSource').value,
     auto_scan_minutes: $('setAuto').value, low_debt_only: $('setLowDebt').checked,
   };

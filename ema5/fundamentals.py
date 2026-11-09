@@ -1,32 +1,28 @@
-"""How much debt a candidate carries, from two independent sources.
+"""How much debt a candidate carries, from ONE source per stock.
 
-Only stocks that actually reach the entry band are looked up, the answer is
-cached for a week (debt moves with quarterly results, not with price), and
-requests are spaced out and run one at a time. A normal day is a handful of
-page views.
+Looked up for every stock in the approaching band (so by the time one reaches
+the trigger it is already known), cached for a week -- debt moves with
+quarterly results, not with price -- and spaced out one request at a time.
 
-  NSE MarketLens  https://marketlens.nseindia.com/api/stocks/<SYMBOL>
-      Official, one small JSON call, and it reports `debtToEquity` straight
-      out, with interest cover and ROCE alongside.
-  screener.in     https://www.screener.in/company/<SYMBOL>/consolidated/
-      Cross-check, computed off the consolidated balance sheet:
-          D/E = Borrowings / (Equity Capital + Reserves)
+  1. screener.in  https://www.screener.in/company/<SYMBOL>/consolidated/
+         Read off the balance sheet: D/E = Borrowings / (Equity Capital +
+         Reserves). Lenders are read off it too (NPAs, ROA, ROE, P/B).
+  2. NSE MarketLens  https://marketlens.nseindia.com/api/stocks/<SYMBOL>
+         Only when screener.in has no figure for an ordinary company.
 
-The two disagree in detail -- screener.in counts lease liabilities as
-borrowings, so it reads TCS as 0.10 where NSE reads 0.00 -- and the verdict
-takes the STRICTER of the two, so a stock is never called debt-free on the
-more generous source alone.
+Whichever source answered is the only one stored and shown. If neither has a
+usable figure the stock is "unknown" and the desk skips it: no guessing.
 
 Banks, NBFCs and insurers are NOT scored on debt-to-equity: on their balance
-sheet borrowings and deposits are raw material, not leverage. They are graded
-on asset quality instead -- Net NPA % (bad loans left after provisions) --
-and shown with the ratios a lender is actually read by: Gross NPA, assets per
-rupee of equity, return on assets, return on equity and price to book.
-screener.in often leaves the NPA rows blank on the consolidated page and fills
-them on the standalone one, so the standalone page is tried when needed.
+sheet borrowings and deposits are raw material, not leverage. They are judged
+on Net NPA % (bad loans left after provisions) and shown with Gross NPA,
+assets per rupee of equity, ROA, ROE and price to book. screener.in often
+leaves the NPA rows blank on the consolidated page and fills them on the
+standalone one, so the standalone page is tried when needed. A lender with no
+Net NPA figure is unknown, and skipped.
 
-MarketLens also returns a flat zero for every ratio it has no data for, which
-must not be read as "no debt", so a row of zeros counts as unknown.
+MarketLens returns a flat zero for every ratio it has no data for, which must
+not be read as "no debt", so a row of zeros counts as unknown.
 """
 from __future__ import annotations
 
@@ -55,11 +51,10 @@ VERY_LOW_DE = 0.10
 LOW_DE = 0.35
 MODERATE_DE = 1.00
 
-# Lenders: Net NPA % (bad loans after provisions) is the headline. Gross NPA is
-# used only when a company publishes no net figure, on a looser scale.
+# Lenders are graded on Net NPA % (bad loans after provisions).
 CLEAN_NNPA, SOUND_NNPA, WATCH_NNPA = 0.5, 1.5, 3.0
-NPA_FRESH_QUARTERS = 2
-CLEAN_GNPA, SOUND_GNPA, WATCH_GNPA = 1.5, 3.0, 6.0
+NPA_FRESH_QUARTERS = 2     # an NPA older than this many quarters is not current
+RECORD_VERSION = 2         # bumped when the saved record's shape changes
 
 VERDICTS = {
     "zero": ("Zero debt", "Carries no borrowings."),
@@ -71,11 +66,10 @@ VERDICTS = {
     "lender_sound": ("Sound book", "Lender: net NPA up to 1.5%."),
     "lender_watch": ("Watch NPAs", "Lender: net NPA between 1.5% and 3%."),
     "lender_stressed": ("Stressed book", "Lender: net NPA above 3%."),
-    "financial": ("Financial · no NPA", "Debt-to-equity does not apply, and no NPA figure was published."),
-    "unknown": ("Debt unknown", "Neither source could supply a figure."),
+    "unknown": ("Debt unknown", "No usable figure from screener.in or NSE MarketLens."),
 }
-ORDER = ["zero", "very_low", "low", "moderate", "high", "unknown",
-         "lender_clean", "lender_sound", "lender_watch", "lender_stressed", "financial"]
+ORDER = ["zero", "very_low", "low", "moderate", "high",
+         "lender_clean", "lender_sound", "lender_watch", "lender_stressed", "unknown"]
 
 
 def _number(text) -> float | None:
@@ -110,19 +104,15 @@ def lender_kind(sector: str | None) -> str:
     return "NBFC"
 
 
-def classify_lender(net_npa: float | None, gross_npa: float | None) -> str:
-    """Asset-quality grade for a lender; `financial` when no NPA figure exists."""
-    if net_npa is not None:
-        clean, sound, watch, value = CLEAN_NNPA, SOUND_NNPA, WATCH_NNPA, net_npa
-    elif gross_npa is not None:
-        clean, sound, watch, value = CLEAN_GNPA, SOUND_GNPA, WATCH_GNPA, gross_npa
-    else:
-        return "financial"
-    if value <= clean:
+def classify_lender(net_npa: float | None) -> str:
+    """Asset-quality grade from Net NPA %; unknown when it is not published."""
+    if net_npa is None:
+        return "unknown"
+    if net_npa <= CLEAN_NNPA:
         return "lender_clean"
-    if value <= sound:
+    if net_npa <= SOUND_NNPA:
         return "lender_sound"
-    if value <= watch:
+    if net_npa <= WATCH_NNPA:
         return "lender_watch"
     return "lender_stressed"
 
@@ -133,8 +123,8 @@ def _ratio(top, bottom, scale: float = 1.0) -> float | None:
     return round(top / bottom * scale, 2)
 
 
-def lender_profile(nse: dict, scr: dict, sector: str | None) -> dict:
-    """The ratios a bank / NBFC / insurer is judged by, from whichever source has them."""
+def lender_profile(scr: dict, sector: str | None) -> dict:
+    """The ratios a bank / NBFC / insurer is judged by, all from screener.in."""
     assets, networth = scr.get("total_assets_cr"), scr.get("networth_cr")
     has_npa = scr.get("net_npa_pct") is not None or scr.get("gross_npa_pct") is not None
     return {
@@ -144,9 +134,9 @@ def lender_profile(nse: dict, scr: dict, sector: str | None) -> dict:
         "npa_period": scr.get("npa_period"),
         "npa_basis": scr.get("npa_basis") if has_npa else None,
         "leverage_x": _ratio(assets, networth),
-        "roa_pct": _ratio(scr.get("net_profit_cr"), assets, 100) or nse.get("roa_pct"),
-        "roe_pct": scr.get("roe_pct") or nse.get("roe_pct"),
-        "pb": scr.get("pb") or nse.get("pb"),
+        "roa_pct": _ratio(scr.get("net_profit_cr"), assets, 100),
+        "roe_pct": scr.get("roe_pct"),
+        "pb": scr.get("pb"),
     }
 
 
@@ -177,6 +167,7 @@ def parse_marketlens(data: dict) -> dict:
     blank = all(not v for v in (de, debt, cover, roce))
     return {
         "source": "NSE MarketLens",
+        "name": data.get("name"),
         "de": None if blank else de,
         "debt_cr": (debt / 1e7) if debt else (0.0 if de == 0 and not blank else None),
         "interest_cover": cover or None,
@@ -185,9 +176,6 @@ def parse_marketlens(data: dict) -> dict:
         "market_cap_cr": (_number(data.get("marketCap")) or 0) / 1e7 or None,
         "promoter_pct": _number(data.get("promoterHolding")),
         "current_ratio": _number(data.get("currentRatio")),
-        "roa_pct": _number(data.get("roa")) or None,
-        "roe_pct": _number(data.get("returnOnEquity")) or None,
-        "pb": _number(data.get("pbRatio")) or None,
         "as_of": data.get("lastUpdated"),
         "url": f"{MARKETLENS}/stocks/{quote(str(data.get('ticker') or ''))}",
         "no_data": blank,
@@ -315,8 +303,8 @@ class DebtBook:
         if not entry:
             return None
         stale = time.time() - entry.get("fetched_at_ts", 0) >= self.ttl
-        # Records saved before lender ratios existed are refetched on next use.
-        if entry.get("financial") and "lender" not in entry:
+        # A record saved in an older shape is refetched on next use.
+        if entry.get("v") != RECORD_VERSION:
             stale = True
         return {**entry, "stale": stale}
 
@@ -411,42 +399,46 @@ class DebtBook:
     # -- combine ----------------------------------------------------------- #
     def refresh(self, symbol: str) -> dict:
         symbol = symbol.upper()
-        nse = self._marketlens(symbol)
         scr = self._screener(symbol)
-
-        sector = nse.get("sector") or scr.get("sector")
+        sector = scr.get("sector")
         financial = is_financial(sector)
-        figures = [v.get("de") for v in (nse, scr) if v.get("de") is not None]
-        # The stricter source wins, so nothing is called debt-free on the
-        # friendlier reading alone.
-        de = max(figures) if figures else None
-        lender = lender_profile(nse, scr, sector) if financial else None
-        verdict = (classify_lender(lender["net_npa_pct"], lender["gross_npa_pct"])
-                   if lender else classify(de))
+        nse: dict = {}
+        source: dict | None = scr if scr.get("de") is not None else None
+
+        if source is None and not financial:
+            # screener.in had nothing: NSE MarketLens is the one fallback.
+            nse = self._marketlens(symbol)
+            sector = sector or nse.get("sector")
+            if is_financial(nse.get("sector")):
+                financial = True        # a lender, and only screener.in has NPAs
+            elif nse.get("de") is not None and not nse.get("no_data"):
+                source = nse
+
+        lender = lender_profile(scr, sector) if financial else None
+        if financial:
+            verdict = classify_lender(lender["net_npa_pct"])
+            source = scr if verdict != "unknown" else None
+        else:
+            verdict = classify(source["de"]) if source else "unknown"
 
         record = {
+            "v": RECORD_VERSION,
             "symbol": symbol,
-            "name": scr.get("name") or None,
+            "name": scr.get("name") or nse.get("name") or None,
             "sector": sector,
             "financial": financial,
             "lender": lender,
-            "de": de,
-            "de_nse": nse.get("de"),
-            "de_screener": scr.get("de"),
-            "debt_cr": nse.get("debt_cr") if nse.get("debt_cr") is not None else scr.get("debt_cr"),
-            "networth_cr": scr.get("networth_cr"),
-            "interest_cover": nse.get("interest_cover"),
-            "roce_pct": nse.get("roce_pct") or scr.get("roce_pct"),
-            "market_cap_cr": nse.get("market_cap_cr") or scr.get("market_cap_cr"),
-            "promoter_pct": nse.get("promoter_pct"),
-            "period": scr.get("period"),
-            "as_of": nse.get("as_of"),
+            "source": source["source"] if source else None,
+            "source_url": source.get("url") if source else None,
+            "de": None if financial or not source else source["de"],
+            "debt_cr": source.get("debt_cr") if source else None,
+            "networth_cr": source.get("networth_cr") if source else None,
+            "roce_pct": source.get("roce_pct") if source else None,
+            "market_cap_cr": source.get("market_cap_cr") if source else None,
+            "period": (source.get("period") or source.get("as_of")) if source else None,
             "verdict": verdict,
             "label": VERDICTS[verdict][0],
-            "nse_url": nse.get("url"),
-            "screener_url": scr.get("url") or f"{SCREENER}/company/{quote(symbol)}/",
-            "errors": [f"{v['source']}: {v['error']}" for v in (nse, scr) if v.get("error")],
-            "disagree": len(figures) == 2 and abs(figures[0] - figures[1]) > 0.15,
+            "errors": [f"{v['source']}: {v['error']}" for v in (scr, nse) if v.get("error")],
             "fetched_at": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
             "fetched_at_ts": time.time(),
         }
@@ -458,17 +450,25 @@ class DebtBook:
     def get(self, symbol: str, refresh: bool = False) -> dict:
         if not refresh:
             entry = self.cached(symbol)
-            if entry and not entry["stale"] and entry.get("de") is not None:
+            if entry and not entry["stale"] and entry.get("verdict") != "unknown":
                 return entry
-            # A page that just failed is not retried on every scan.
-            if entry and entry.get("de") is None and time.time() - entry.get("fetched_at_ts", 0) < 1800:
+            # A lookup that just failed is not retried on every scan.
+            if entry and entry.get("verdict") == "unknown" and entry.get("v") == RECORD_VERSION \
+                    and time.time() - entry.get("fetched_at_ts", 0) < 1800:
                 return entry
         return self.refresh(symbol)
 
-    def passes(self, record: dict | None, max_de: float) -> bool | None:
-        """True / False / None when the debt level cannot be judged."""
-        # A lender is never judged on debt-to-equity, whatever grade it carries.
-        if not record or record.get("financial") or record.get("verdict") == "unknown":
-            return None
+    def judge(self, record: dict | None, max_de: float, max_nnpa: float) -> tuple[bool | None, str]:
+        """(passes, why). passes is None when the figure is not known, and an
+        unknown stock is skipped, never waved through."""
+        if not record:
+            return None, "not checked yet"
+        if record.get("financial"):
+            npa = (record.get("lender") or {}).get("net_npa_pct")
+            if npa is None:
+                return None, "no net NPA data"
+            return npa <= max_nnpa, f"net NPA {npa:.2f}%"
         de = record.get("de")
-        return None if de is None else de <= max_de
+        if record.get("verdict") == "unknown" or de is None:
+            return None, "no debt data"
+        return de <= max_de, f"D/E {de:.2f}"

@@ -111,3 +111,83 @@ def test_a_failed_scan_keeps_the_saved_results_and_their_date(desk_factory):
     assert second.scan_state["status"] == "failed"
     assert second.scan_state["finished_at"] == "2026-01-15T10:00:00+05:30"
     assert "TESTCO" in second._setups
+
+
+# ---- debt filter -------------------------------------------------------------
+# The seeded stock sits 5.9% under its trigger: with the default 2% watch band
+# it is "approaching"; widening the band to 7% makes it "at the trigger".
+AT_TRIGGER, APPROACHING = 7.0, 2.0
+
+
+def lender_record(npa):
+    return {"v": 2, "symbol": "TESTCO", "financial": True, "verdict": "lender_sound", "de": None,
+            "lender": {"net_npa_pct": npa}, "source": "screener.in", "fetched_at_ts": 9e12}
+
+
+def company_record(de):
+    return {"v": 2, "symbol": "TESTCO", "financial": False, "verdict": "low", "de": de,
+            "lender": None, "source": "screener.in", "fetched_at_ts": 9e12}
+
+
+def shown(desk):
+    state = desk.state()
+    return ([r["symbol"] for r in state["candidates"]],
+            [r["symbol"] for r in state["approaching"]],
+            state["hidden_by_debt"])
+
+
+def prepared(desk_factory, band, **settings):
+    desk = desk_factory()
+    seed(desk)
+    desk.store.save_settings({"max_distance_pct": band, **settings})
+    return desk
+
+
+@pytest.mark.parametrize("band, view, name", [(AT_TRIGGER, 0, "candidates"), (APPROACHING, 1, "approaching")])
+def test_debt_filter_shows_only_stocks_that_pass(desk_factory, band, view, name):
+    desk = prepared(desk_factory, band)
+    desk.debt._data["TESTCO"] = company_record(0.10)
+    assert shown(desk)[view] == ["TESTCO"]
+
+    desk.debt._data["TESTCO"] = company_record(0.90)
+    candidates, approaching, hidden = shown(desk)
+    assert candidates == [] and approaching == []
+    assert hidden[0]["debt_why"] == "D/E 0.90" and hidden[0]["view"] == name
+
+
+def test_a_lender_is_filtered_on_net_npa(desk_factory):
+    desk = prepared(desk_factory, AT_TRIGGER)
+    desk.debt._data["TESTCO"] = lender_record(0.4)
+    assert shown(desk)[0] == ["TESTCO"]
+    desk.debt._data["TESTCO"] = lender_record(2.5)
+    assert shown(desk)[0] == [] and shown(desk)[2][0]["debt_why"] == "net NPA 2.50%"
+    desk.store.save_settings({"max_nnpa": 3.0})
+    assert shown(desk)[0] == ["TESTCO"]
+
+
+def test_unknown_debt_is_skipped_not_flagged(desk_factory):
+    desk = prepared(desk_factory, AT_TRIGGER)
+    assert shown(desk)[0] == []                       # never looked up
+    assert shown(desk)[2][0]["debt_why"] == "not checked yet"
+    desk.debt._data["TESTCO"] = {**company_record(None), "verdict": "unknown", "source": None}
+    assert shown(desk)[0] == [] and shown(desk)[2][0]["debt_why"] == "no debt data"
+
+
+def test_filter_off_shows_everything(desk_factory):
+    desk = prepared(desk_factory, AT_TRIGGER, low_debt_only=False)
+    assert shown(desk)[0] == ["TESTCO"] and shown(desk)[2] == []
+
+
+def test_debt_is_looked_up_for_the_approaching_band_too(desk_factory):
+    desk = prepared(desk_factory, APPROACHING)         # stock is in "approaching", not at the trigger
+    asked = []
+    desk.debt.get = lambda symbol, *a, **k: asked.append(symbol) or {}
+    desk._fill_debt(desk.store.settings())
+    assert asked == ["TESTCO"]
+
+
+def test_new_net_npa_setting_is_validated(desk_factory):
+    desk = desk_factory()
+    assert desk.store.settings()["max_nnpa"] == 1.0
+    with pytest.raises(ValueError):
+        desk.store.save_settings({"max_nnpa": 50})
